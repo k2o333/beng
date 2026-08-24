@@ -12,6 +12,8 @@
 | [02-numbers.md](02-numbers.md) | 数值骨架：公式、曲线、关键数值表 | 策划、程序 |
 | [03-content.md](03-content.md) | 30 个 NPC 内容表、圈层主题、文案基调 | 策划、文案 |
 | [04-roadmap.md](04-roadmap.md) | 开发路线、验收标准、二期扩展 | 所有人 |
+| [05-bar-ui.md](05-bar-ui.md) | 桌面 bar 形态 UI 规格、像素美术、v1 决策 | 所有人 |
+| [06-appearance.md](06-appearance.md) | 30 个 NPC 外观要求（像素/立绘需求单） | 美术、文案 |
 
 ## 一句话概括
 

@@ -1,0 +1,28 @@
+{
+  "name": "renmai-bar",
+  "productName": "人脉圈 Alpha",
+  "version": "0.1.0",
+  "description": "桌面底部通栏像素放置游戏（单机 v1）",
+  "main": "main.js",
+  "author": "proj.beng",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "test": "node tests/test-engine.js",
+    "dist": "electron-builder --win nsis portable"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  },
+  "build": {
+    "appId": "com.beng.renmaibar",
+    "productName": "RenmaiBar",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "preload.js", "src/**/*", "assets/**/*"],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }, { "target": "portable", "arch": ["x64"] }]
+    },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+  }
+}

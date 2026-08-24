@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>人脉圈 Alpha</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 面板区：向上展开 420px，panel-open 时显示 -->
+  <div id="panel">
+    <div id="panel-head">
+      <span id="panel-title"></span>
+      <button id="panel-close" data-action="panel-close">✕</button>
+    </div>
+    <div id="panel-body"></div>
+  </div>
+
+  <!-- 底部通栏主条：贴任务栏常驻 -->
+  <div id="bar">
+    <div id="hud">
+      <div><span id="hud-gold">💰 0</span></div>
+      <div><span id="hud-rep">🏅 0</span></div>
+      <div class="stam-line"><span id="hud-stam">⚡ 100/100</span><span class="stam-track"><i id="stam-bar"></i></span></div>
+      <div><span id="hud-inc">收入 0/秒</span></div>
+    </div>
+    <div id="stage-wrap"><canvas id="stage"></canvas></div>
+    <div id="actions">
+      <button data-panel="gonglue">攻略</button>
+      <button data-panel="shuxing">属性</button>
+      <button data-panel="quanceng">圈层</button>
+      <button data-panel="shezhi">设置</button>
+    </div>
+  </div>
+
+  <div id="toast" class="hidden"></div>
+  <!-- 离线简报 / 确认弹窗（点空白不关闭，必须点按钮） -->
+  <div id="overlay" class="hidden"><div id="overlay-card"></div></div>
+
+  <script src="js/data/balance.js"></script>
+  <script src="js/data/npcs.js"></script>
+  <script src="js/data/texts.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/sprites.js"></script>
+  <script src="js/fx.js"></script>
+  <script src="js/ui-bar.js"></script>
+  <script src="js/ui-panel.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
