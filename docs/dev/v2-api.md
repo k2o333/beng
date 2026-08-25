@@ -33,8 +33,8 @@
   cds: { [npcId]: { wx: gtTs, wp: gtTs, mo: gtTs } },    // 冷却到期 gt 时间戳
   errandUsed: {},
   spent: { day: 0, global: 0, npc: {} },  // 日预算台账；day=dayIndex
-  inv: [ { it: 'gift_box', q: 'fine' } ], // 背包，上限 BALANCE.LOOT.INV_CAP
-  drops: [ { uid, id(npcId), kind:'gold'|'item'|'letter', itemId?, qty?, bornReal } ],
+  inv: [ { it: 'gift_box', q: 'fine', n: 1 } ], // 背包（Wave2 堆叠模型）：同名同品质并堆，n∈[1,99]，上限 invCap(state)
+  drops: [ { uid, id(npcId), kind:'gold'|'item'|'letter'|'intel', itemId?, qty?, bornReal } ],
   lootNext: { [assetId]: gtTs },
   buffs: { dateOffGt: 0, attrHalf: false },
   invites: [ { id, expGt } ],
@@ -42,7 +42,9 @@
   intel: { [npcId]: { third:true?, line:true?, mine:true? } },
   weekReturn: { [npcId]: weekIdx },
   log: [ { gt, txt } ],                   // 决策日志，尾部最新，上限 settings.decisionLogDepth
-  stats: { totalWage: 0 }
+  stats: { totalWage, totalInteract, totalWorkMs, totalLoot, totalDates },
+  perks: {},                              // 成就 id -> true（达成即永久被动，next-iteration §2）
+  capLevel: 0                             // 背包扩容档位（INV_CAP_UPGRADES 下标，§4）
 }
 ```
 
@@ -87,13 +89,19 @@ startShift(state, hours, nowReal)             // shiftEndGt = gt + hours*3600000
 stopShift(state)
 shiftInfo(state, nowReal) -> { onDuty, resting, wagePerSec, endInMs }
 
-// 掉落与背包（07）
+// 掉落与背包（07 + Wave2 堆叠/扩容/自动出售）
 rollLoot(state, def, rng) -> {kind, itemId?, qty?, rep?}   // 纯函数便于测试
 collectDrop(state, uid, crit, rng) -> events  // 入包/入账；crit×2 仅金币包；从 state.drops 移除
-invAdd(state, itemId, quality, rng) -> bool   // 满50挤普通（先低品质后旧）
-sellItem(state, idx) -> {ok, gold}
-useItem(state, idx, targetId?, rng) -> {ok, events}  // send 类走 targetId
+invAdd(state, itemId, quality[, n], rng) -> bool  // 堆叠入包（n 缺省1，堆上限99）；满格挤普通（先低品质后旧），稀有永不自动消失
+invCap(state) -> int                          // LOOT.INV_CAP + INV_CAP_UPGRADES[capLevel-1].cap
+buyInvCap(state) -> {ok, msg, cap?}           // 金币坑扩容（5万/50万/500万 → 60/70/80 格）
+autoSellRank(state) -> -1|0|1                 // autoSellGrade 阈值序；off=-1
+sellUnitPrice(it) -> int                      // max(1, round(sell×SELL_RATE))
+sellItem(state, idx[, n]) -> {ok, gold, sold} // 缺省售整堆；n 指定件数
+useItem(state, idx, targetId?, rng) -> {ok, events}  // send 类走 targetId；消耗 1 件（n-1，归零移除）
 sendItem(state, idx, targetId, rng)           // = useItem 的 send 分支别名
+synthItems(state, picks[{i,n}], rng) -> {ok, gained:{id,q}, txt}  // 3合1升品质：Σn=SYNTH.NEED、同品质非稀有、全表随机产物
+findSynthTriple(state) -> {grade, picks}|null // GM/便捷：自动挑一组可合成材料
 dropHitTest 由 UI 完成：UI 读 state.drops 自行渲染
 
 // 约会随机（08）
@@ -106,12 +114,17 @@ refreshHotspots(state, day, rng)
 // 离线（04 §5：同一架构模拟）
 settleOffline(state, nowReal, rng) -> report{
   awayMs, ms, capped,
-  wage, packGold, letterRep, milestoneGold, milestoneRep,
+  wage, packGold, letterRep, milestoneGold, milestoneRep, soldN,
   favors:[{id,name,gained}],
   actions:[{txt,n}],        // 聚合的决策动作（简报"主角动态"）
-  package:[{it,q}],         // 离线掉落包裹（收下时 invAdd）
+  package:[{it,q,n}],       // 离线掉落包裹（收下时 absorbOfflinePackage，带 n 计拾取成就）
   stageNotes:[txt]          // 阶段切换独白
 }
+absorbOfflinePackage(state, list[{it,q,n}]) -> [{it,q,n,ok}]  // 领取入口：逐条入包+计 totalLoot+成就检查
+
+// 成就层（next-iteration §2）
+checkAchievements(state, events)              // 达成写 state.perks 并推 {t:'ach'}；step/消费/掉落各管线自动调用
+assetCount(state) / perkMul(state, key) / staminaMaxOf(state)
 
 // 设置/GM（01 §2.2）
 applyPreset(state, key)                // customMode=false
@@ -132,8 +145,11 @@ migrate(rawObj) -> state|null          // v1→v2 迁移；损坏返回 null
 {t:'stage', id, from, to, mono}            // 阶段切换（grantFavor 内检测）
 {t:'date', id, key, label, mult}           // 约会事件结果
 {t:'return', id, itemId}                   // NPC 回礼
-{t:'drop', uid, id, kind, itemId?, qty?}   // 掉落落地（UI 生成下落动画）
-{t:'collect', txt, color}                  // 拾取浮字（UI 直接展示）
+{t:'drop', uid, id, kind, itemId?, qty?, q?}  // 掉落落地（UI 生成下落动画）
+{t:'collect', txt}                          // 拾取浮字（UI 直接展示）
+{t:'autosell', txt, itemId, q, gold}        // 阈值自动售出（浮字金色，同批 collect 同文案去重）
+{t:'ach', id, name, perkText}               // 成就达成（toast + 大号浮字，toast 受 notifyLevel 门控）
+{t:'synth', txt}                            // 合成结果（UI 大号浮字；引擎同步返回，UI 自行包装）
 {t:'invite', id}                           // 收到邀约
 {t:'item', txt}                            // 物品使用反馈
 {t:'work', txt}                            // 上班提示（小费等）
@@ -179,6 +195,26 @@ deep=+远行/大礼；close=+办事。风格调制：frugal=只免费+小礼；g
   （小传/产出/引荐/成本/偏好/一句价值）数据源 TEXTS.dossier[id] = {bio, value}，
   其余四行动态生成。notifyLevel 门控 App.notify。
 
+### 4.1 Wave2-U 约定（next-iteration §1~§4 落地）
+
+- 背包页：CSS grid `repeat(auto-fill, minmax(48px,1fr))` 方格槽位；品质边框色
+  q-common/q-fine/q-rare；右下角数量角标（n>1）；分类页签 全部/礼物/消耗/票券/功能
+  （按 effect.kind 分流，UIPanel.KIND_TAB_MAP 口径）；悬停 tooltip 走 window.Tip。
+- 合成 3合1：背包页「合成」进入多选模式，点选凑满 SYNTH.NEED(3) 件同品质非稀有 →
+  `synth-run`（Engine.synthItems）；synthBusy 防重复点击；产物全表随机并推 {t:'synth'} 浮字。
+- 物品详情弹窗：大图标+名称/品质/效果/来源(src)/售价；[使用]（send 类二次选人 showItemTarget）
+  [出售整堆] [关闭]；操作经 use-item/sell-item 原有管线。
+- 名册页（gonglue）：网格卡片 minmax(190px,1fr)，圈层分组头保留；状态页签
+  全部/可攻略/攻略中/人脉资产/已引荐（跨圈层过滤，空节隐藏，锁定卡半透明）；
+  整卡点击开 NPC 详情弹窗（快捷操作行+档案六行+消费菜单），commit() 后 refreshModal 原地刷新；
+  bar 舞台点 NPC → openPanel('gonglue', id) 定位卡片并弹详情，被页签过滤时回退「全部」。
+- 属性页：底部「成就」分组列 BALANCE.ACHIEVEMENTS 五条（进度=stats[stat]/assets，
+  totalWorkMs 按小时显示；lit=perks[id] 已亮起+被动生效中）。
+- 设置页：autoSellGrade 三档 select（off/common/fine，data-set 管线）；「背包」组扩容按钮
+  `cap-buy`（Engine.buyInvCap，已满级置灰）。
+- 浮字坐标统一走 fxCtr/fxY（app.js）：取 #stage-wrap 可视区中心/底缘，
+  自动适配窄条横向滚动与四边吸附，不再使用 innerWidth/barH 硬编码。
+
 ## 5. 测试约定（V）
 
 纯 node 零依赖（沿用现有 ok/eq/near 风格）。入口：
@@ -200,3 +236,11 @@ rng 注入：所有随机入口接受可选 rng 参数（默认 Math.random）�
 | 情报类掉落产生物品 | 直接调用 `revealIntel` 即时揭示，不占背包 | 文档缺口裁决：08 §6 情报机制不依赖背包道具 |
 | `TEXTS.work.tip` | 数据就绪、暂未被 UI 消费 | 引擎小费事件直接输出文本，文案池留作后续替换 |
 | 界面组 pixelScale | 不进 settings，由 main.js cfg 管理 | 缩放涉及窗口尺寸属主进程职责 |
+| `invAdd(state, itemId, quality, rng)` | `invAdd(state, itemId, q[, n], rng)`，第4参为数量 | Wave2 堆叠模型（§3.3.1）；rng 顺延为第5参 |
+| 背包条目 `{it,q}` | `{it,q,n}`（n 缺省按 1，迁移兼容旧档） | 堆叠模型；useItem/sellItem/invAdd 三处同步改造 |
+| 名册卡片行内展开区 | 整卡点击开详情弹窗，操作后 refreshModal 原地刷新 | next-iteration §3.3.2 验收口径 |
+| collect 浮字由 app.collectDrop 直绘 | 统一走 App.eventFx `{t:'collect'}` 分支 | autosell/暴击配色与同批去重集中处理 |
+| Fx 浮字 y 用 barH 硬编码 | fxCtr/fxY 读 #stage-wrap 可视区 | Wave1-B 四边吸附 + 窄条滚动适配（B 侧提示） |
+| 布局仅 applyBounds 时广播 | 新增 `ipcMain.handle('layout:get')` + preload `api.getLayout`，ui-bar 初始化主动拉一次 | 冷启动首条广播早于渲染层监听注册会丢，wr 恒为 full 塞 1/5 条（实机视检发现） |
+| 物品弹窗刷新按 idx 校验 | modalCtx 记录 `{it,q}` 身份，不匹配即关窗 | 堆叠 splice 左移后 idx 命中他条目：出售后弹窗不关且串位显示别物（实机视检发现） |
+| `.q-*` 边框色直接用于 .bag-cell | 追加 `.bag-cell.q-*` 双类名规则 | 同特异性下后者覆盖，品质边框全部退化为 var(--line)（实机视检发现） |

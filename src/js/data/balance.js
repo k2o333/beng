@@ -157,7 +157,40 @@ globalThis.BALANCE = {
   },
 
   DAY_MS: 86400000,
-  WEEK_MS: 7 * 86400000
+  WEEK_MS: 7 * 86400000,
+
+  // ── 品质与合成（next-iteration §1）──
+  GRADE_RANK: { common: 0, fine: 1, rare: 2 },
+  GRADE_TXT: { common: '普通', fine: '精致', rare: '稀有' },
+  NEXT_GRADE: { common: 'fine', fine: 'rare' },
+  SYNTH: { NEED: 3 },            // N 同品质 → 1 高一档随机物品
+
+  // ── 背包扩容金币坑（next-iteration §4）──
+  INV_CAP_UPGRADES: [
+    { cost: 50000, cap: 60 },
+    { cost: 500000, cap: 70 },
+    { cost: 5000000, cap: 80 }
+  ],
+  AUTOSELL_RATE: 0.3,            // 自动出售折价口径（同 SELL_RATE）
+
+  // ── 账号级被动成就层（next-iteration §2）：成就即被动，永久生效 ──
+  ACHIEVEMENTS: [
+    { id: 'touch', name: '摸鱼大师', stat: 'totalInteract', goal: 1000,
+      desc: '累计线下互动 1000 次', perkText: '全局好感 +3%', flavor: '摸鱼不是懈怠，是给生活留的透气缝。',
+      favorMul: 1.03 },
+    { id: 'workaholic', name: '全勤打工人', stat: 'totalWorkMs', goal: 100 * 3600000,
+      desc: '累计上班 100 游戏小时', perkText: '时薪 +10%', flavor: '全勤没有全勤奖，但时薪记得你。',
+      wageMul: 1.1 },
+    { id: 'picker', name: '捡漏之王', stat: 'totalLoot', goal: 500,
+      desc: '累计拾取掉落 500 件', perkText: '掉落间隔 -5%', flavor: '别人眼里的破烂，是你攒的第一桶金。',
+      dropMul: 0.95 },
+    { id: 'social', name: '社交悍匪', stat: 'totalDates', goal: 100,
+      desc: '累计约会 100 次', perkText: '约会价格 -5%', flavor: '约了一百次，终于不再尬聊。',
+      datePriceMul: 0.95 },
+    { id: 'networker', name: '人脉广博', stat: 'assets', goal: 10,
+      desc: '资产数达到 10', perkText: '体力上限 +20', flavor: '通讯录厚了，腰杆也直了。',
+      stamMaxAdd: 20 }
+  ]
 };
 
 // ── 管理后台可配置项默认值（01 §2.2 权威定义）──
@@ -197,7 +230,9 @@ globalThis.SETTINGS_DEFAULT = {
   // 界面组
   autoPickup: true,
   notifyLevel: 'all',      // all|milestone|mute
-  decisionLogDepth: 50
+  decisionLogDepth: 50,
+  // 背包自动出售阈值（next-iteration §4.1）：off|common|fine
+  autoSellGrade: 'off'
 };
 
 // ── 后台预设（01 §2.3）──

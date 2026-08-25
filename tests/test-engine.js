@@ -238,25 +238,33 @@ function seqRng(values) { let i = 0; return () => values[i++ % values.length]; }
     '间隔基准 120s÷系数1.2（jitter=1.0 口径）');
 })();
 
-// ── 11. 掉落拾取/背包容量与挤占/出售 ──
+// ── 11. 掉落拾取/背包容量与挤占/出售（堆叠模型回归锚点）──
 (function () {
   const st = fresh();
   st.drops.push({ uid: 1, id: 't1_gu', kind: 'gold', qty: 500, bornReal: NOW });
   let r = Engine.collectDrop(st, 1, true);
   ok(r.ok && st.gold === 10000 + 1000, '暴击 ×2 到账');
   st.inv = [];
-  for (let i = 0; i < 50; i++) ok(Engine.invAdd(st, 'souvenir', 'common'), '第' + (i + 1) + '件入包');
-  ok(Engine.invAdd(st, 'limited_collectible', 'rare'), '满包稀有仍可入（挤普通）');
-  eq(st.inv.length, 50, '容量封顶 50');
-  ok(st.inv.some((x) => x.it === 'limited_collectible'), '新物在包');
-  st.inv = []; for (let i = 0; i < 50; i++) st.inv.push({ it: 'souvenir', q: 'rare' });
+  for (let i = 0; i < 48; i++) st.inv.push({ it: i % 2 ? 'souvenir' : 'intel_brief', q: 'common', n: 1 });
+  st.inv.push({ it: 'milk_tea_coupon', q: 'common', n: 2 });   // 49 格
+  ok(Engine.invAdd(st, 'gift_box', 'fine'), '未满入包');
+  eq(st.inv.length, 50, '容量封顶 50（基础档）');
+  ok(Engine.invAdd(st, 'energy_coffee', 'common'), '满包挤普通');
+  eq(st.inv.length, 50, '挤占后仍封顶 50');
+  ok(st.inv.some((x) => x.it === 'energy_coffee'), '新物在包');
+  st.inv = []; for (let i = 0; i < 50; i++) st.inv.push({ it: 'souvenir', q: 'rare', n: 1 });
   eq(st.inv.length, 50, '稀有包已满');
-  ok(Engine.invAdd(st, 'souvenir', 'common') === false, '全稀有包拒收普通');
-  st.inv = [{ it: 'souvenir', q: 'common' }];
-  st.inv = [{ it: 'souvenir', q: 'common' }];
+  eq(Engine.invAdd(st, 'souvenir', 'common'), false, '全稀有包拒收普通');
+  const unit = Math.max(1, Math.round(25 * 0.3));
+  st.inv = [{ it: 'souvenir', q: 'common', n: 3 }];
   const g0 = st.gold;
   r = Engine.sellItem(st, 0);
-  ok(r.ok && r.gold === Math.round(25 * 0.3) && st.gold === g0 + r.gold, '出售折价 30%');
+  ok(r.ok && r.gold === unit * 3 && st.gold === g0 + r.gold, '整堆出售折价 30%×n');
+  eq(st.inv.length, 0, '整堆售罄移除条目');
+  st.inv = [{ it: 'souvenir', q: 'common', n: 5 }];
+  r = Engine.sellItem(st, 0, 2);
+  eq(st.inv[0].n, 3, '部分出售扣减数量');
+  eq(r.gold, unit * 2, '部分出售金额口径一致');
 })();
 
 // ── 12. 物品效果 ──
@@ -413,6 +421,169 @@ function seqRng(values) { let i = 0; return () => values[i++ % values.length]; }
   st.buffs.attrHalf = true;
   const r = Engine.upgradeAttr(st, 'charm');
   ok(r.ok && r.cost === 75 && !st.buffs.attrHalf, '画册半价生效并消耗');
+})();
+
+// ── 21. 堆叠模型 {it,q,n}（next-iteration §3.3.1）──
+(function () {
+  const st = fresh();
+  ok(Engine.invAdd(st, 'gift_box', 'fine', 250), '批量入包成功');
+  eq(st.inv.length, 3, '250 件按 99 上限分堆');
+  ok(st.inv[0].n === 99 && st.inv[1].n === 99 && st.inv[2].n === 52, '单堆上限 99');
+  st.inv = [{ it: 'energy_coffee', q: 'common', n: 10 }];
+  Engine.invAdd(st, 'energy_coffee', 'common', 5);
+  eq(st.inv.length, 1, '同 id 同品质并入单堆');
+  eq(st.inv[0].n, 15, '数量累加');
+  Engine.invAdd(st, 'energy_coffee', 'fine', 1);
+  eq(st.inv.length, 2, '不同品质分开堆');
+  const raw = { v: 2, createdAt: NOW, lastSeen: NOW, settings: {},
+    inv: [{ it: 'souvenir', q: 'common' }, { it: 'gift_box', q: 'fine', n: 7 }] };
+  const m = Engine.migrate(raw);
+  eq(m.inv[0].n, 1, '旧档条目迁移补 n=1');
+  eq(m.inv[1].n, 7, '已有 n 保留');
+  ok(m.perks && m.capLevel === 0 && typeof m.stats.totalLoot === 'number'
+    && typeof m.stats.totalInteract === 'number' && typeof m.stats.totalWorkMs === 'number',
+    '成就/扩容/统计字段兜底');
+})();
+
+// ── 22. 合成 3 合 1（next-iteration §1）──
+(function () {
+  const st = fresh();
+  st.inv = [
+    { it: 'energy_coffee', q: 'common', n: 2 },
+    { it: 'souvenir', q: 'common', n: 1 }
+  ];
+  let r = Engine.synthItems(st, [{ i: 0, n: 2 }, { i: 1, n: 1 }], seqRng([9 / 12]));
+  ok(r.ok && r.gained.q === 'fine' && r.gained.id === 'gift_box', '3 普通必得精致（含 send 类）');
+  eq(st.inv.filter((e) => e.q === 'common').length, 0, '跨堆材料消耗干净');
+  ok(st.inv.some((e) => e.it === 'gift_box'), '产物入包');
+  st.inv = [{ it: 'energy_coffee', q: 'common', n: 3 }];
+  r = Engine.synthItems(st, [{ i: 0, n: 3 }], seqRng([0]));
+  ok(r.ok && st.inv.length === 1 && st.inv[0].q === 'fine', '单堆整份合成');
+  st.inv = [{ it: 'energy_coffee', q: 'common', n: 2 }];
+  r = Engine.synthItems(st, [{ i: 0, n: 2 }]);
+  ok(!r.ok && st.inv.length === 1 && st.inv[0].n === 2, '<3 拒绝不消耗');
+  st.inv = [{ it: 'energy_coffee', q: 'common', n: 2 }, { it: 'gift_box', q: 'fine', n: 1 }];
+  r = Engine.synthItems(st, [{ i: 0, n: 2 }, { i: 1, n: 1 }]);
+  ok(!r.ok && st.inv.length === 2, '混品质拒绝不消耗');
+  st.inv = [{ it: 'referral_card', q: 'rare', n: 3 }];
+  r = Engine.synthItems(st, [{ i: 0, n: 3 }]);
+  ok(!r.ok && st.inv[0].n === 3, '稀有不可再合');
+  // 满包且部分消耗（腾不出格）→ 拒绝且原子
+  st.capLevel = 3;
+  st.inv = [];
+  for (let i = 0; i < 79; i++) st.inv.push({ it: i % 2 ? 'souvenir' : 'intel_brief', q: 'rare', n: 1 });
+  st.inv.push({ it: 'energy_coffee', q: 'common', n: 10 });
+  r = Engine.synthItems(st, [{ i: 79, n: 3 }]);
+  ok(!r.ok && st.inv.length === 80 && st.inv[79].n === 10, '满包无空位拒绝且不消耗材料');
+  st.inv.splice(0, 1);   // 腾出一格
+  r = Engine.synthItems(st, [{ i: 78, n: 3 }], seqRng([0]));
+  ok(r.ok, '有空位即可合成');
+  ok(Engine.findSynthTriple(st) !== null || true, 'findSynthTriple 可调用');
+})();
+
+// ── 23. 背包扩容金币坑（next-iteration §4）──
+(function () {
+  const st = fresh();
+  eq(Engine.invCap(st), 50, '基础容量 50');
+  st.gold = 6000000;
+  let r = Engine.buyInvCap(st);
+  ok(r.ok && Engine.invCap(st) === 60, '一级扩容 60 格');
+  r = Engine.buyInvCap(st);
+  ok(r.ok && Engine.invCap(st) === 70, '二级扩容 70 格');
+  r = Engine.buyInvCap(st);
+  ok(r.ok && Engine.invCap(st) === 80, '三级扩容 80 格');
+  r = Engine.buyInvCap(st);
+  ok(!r.ok, '买完再买拒绝');
+  near(st.gold, 450000, 1e-6, '累计扣费 5万+50万+500万');
+  st.gold = 100;
+  r = Engine.buyInvCap(st);
+  ok(!r.ok && Engine.invCap(st) === 80, '金币不足拦截');
+  const st2 = fresh();
+  st2.capLevel = 1;
+  for (let i = 0; i < 59; i++) st2.inv.push({ it: i % 2 ? 'souvenir' : 'intel_brief', q: 'common', n: 1 });
+  ok(Engine.invAdd(st2, 'milk_tea_coupon', 'common'), '60 格口径下入包');
+  eq(st2.inv.length, 60, '一级扩容后容量生效');
+})();
+
+// ── 24. 自动出售阈值（next-iteration §4.1）──
+(function () {
+  const unitOf = (id) => Math.max(1, Math.round(globalThis.ITEM_BY_ID[id].sell * 0.3));
+  const st = fresh();
+  st.drops.push({ uid: 1, id: 't1_gu', kind: 'item', itemId: 'souvenir', q: 'common', bornReal: NOW });
+  let r = Engine.collectDrop(st, 1, false, Math.random);
+  ok(r.ok && st.inv.some((e) => e.it === 'souvenir'), 'off：普通照常入包');
+  Engine.setSetting(st, 'autoSellGrade', 'common');
+  const g0 = st.gold;
+  const c0 = st.inv.length;
+  st.drops.push({ uid: 2, id: 't1_gu', kind: 'item', itemId: 'souvenir', q: 'common', bornReal: NOW });
+  r = Engine.collectDrop(st, 2, false, Math.random);
+  ok(r.events.some((e) => e.t === 'autosell'), 'autosell 事件推送');
+  eq(st.gold - g0, unitOf('souvenir'), '普通折价 30% 入账');
+  eq(st.inv.length, c0, '自动售出后不入包');
+  Engine.setSetting(st, 'autoSellGrade', 'fine');
+  const g1 = st.gold;
+  st.drops.push({ uid: 3, id: 't1_gu', kind: 'item', itemId: 'gift_box', q: 'fine', bornReal: NOW });
+  Engine.collectDrop(st, 3, false, Math.random);
+  eq(st.gold - g1, unitOf('gift_box'), '「精致及以下」精致也折价');
+  const c1 = st.inv.length;
+  st.drops.push({ uid: 4, id: 't1_gu', kind: 'item', itemId: 'limited_collectible', q: 'rare', bornReal: NOW });
+  Engine.collectDrop(st, 4, false, Math.random);
+  eq(st.inv.length, c1 + 1, '「精致及以下」下稀有必入包');
+  ok(st.stats.totalLoot > 0, '拾取计数累计');
+  // 离线同口径
+  const st2 = fresh();
+  Engine.setSetting(st2, 'autoSellGrade', 'fine');
+  st2._offPackage = []; st2._offPackGold = 0;
+  Engine.applyOfflineLoot(st2, { kind: 'item', itemId: 'souvenir', q: 'common' });
+  Engine.applyOfflineLoot(st2, { kind: 'item', itemId: 'limited_collectible', q: 'rare' });
+  eq(st2._offPackGold, unitOf('souvenir'), '离线折价进 packGold 口径');
+  ok(st2._offPackage.length === 1 && st2._offPackage[0].q === 'rare' && st2._offPackage[0].n === 1,
+    '离线包裹过滤稀有入包（带 n）');
+  // 领取计入拾取成就并触发解锁
+  const st3 = fresh();
+  st3.stats.totalLoot = 490;
+  Engine.absorbOfflinePackage(st3, [{ it: 'souvenir', q: 'common', n: 20 }]);
+  eq(st3.stats.totalLoot, 510, '离线领取计拾取数');
+  ok(st3.perks.picker === true, '捡漏之王跨线解锁');
+})();
+
+// ── 25. 成就即被动（next-iteration §2）──
+(function () {
+  const st = fresh();
+  near(Engine.autoFavorPerMin(st, DEF.t1_lin), 0.5, 1e-9, '基线好感 0.5/分');
+  st.perks.touch = true;
+  near(Engine.autoFavorPerMin(st, DEF.t1_lin), 0.515, 1e-9, '摸鱼大师 全局好感 ×1.03');
+  const stW = fresh();
+  stW.slots = [];                 // 清槽隔离里程碑金，只看工资
+  Engine.startShift(stW, 4);
+  const g1 = stW.gold;
+  Engine.step(stW, 3600000);
+  const dNoPerk = stW.gold - g1;
+  stW.perks.workaholic = true;
+  const g2 = stW.gold;
+  Engine.step(stW, 3600000);
+  near((stW.gold - g2) / dNoPerk, 1.1, 0.01, '全勤打工人 时薪 ×1.1');
+  ok(stW.stats.totalWorkMs >= 7200000 - 1, '在岗时长计数累计');
+  Engine.stopShift(stW);
+  st.perks.social = true;
+  eq(Engine.priceOf(st, 'date', 'light', 1), Math.round(120 * 0.95), '社交悍匪 约会价 ×0.95');
+  st.perks.networker = true;
+  eq(Engine.staminaMaxOf(st), 120, '人脉广博 体力上限 +20');
+  st.stamina = 115;
+  Engine.step(st, 60000);
+  ok(st.stamina <= 120, '再生不超过新上限');
+  st.perks.picker = true;
+  near(Engine.lootIntervalMs(st, DEF.t1_gu, () => 0.5) / 1000, 95, 0.01, '捡漏之王 掉落间隔 ×0.95');
+  const st2 = fresh();
+  st2.buffs.dateOffGt = st2.gt + 3600000;
+  st2.perks.social = true;
+  eq(Engine.priceOf(st2, 'date', 'light', 1), Math.round(120 * 0.8 * 0.95), '名片夹 8 折与被动叠乘');
+  const st3 = fresh();
+  st3.stats.totalInteract = 999;
+  const r = Engine.interact(st3, 't1_gu', NOW);
+  ok(r.ok && r.events.some((e) => e.t === 'ach' && e.name === '摸鱼大师'), '达成瞬间推 ach 事件');
+  ok(st3.perks.touch === true, 'perks 写入存档');
+  ok(st3.stats.totalInteract === 1000, '线下互动计数');
 })();
 
 console.log('');

@@ -134,9 +134,18 @@
 
   function consumeFocus() {
     if (!pendingFocus) return;
-    const el = $('panel-body').querySelector('.card[data-id="' + pendingFocus + '"]');
+    const id = pendingFocus;
+    let el = $('panel-body').querySelector('.card[data-id="' + id + '"]');
+    // 当前状态页签过滤掉了目标时，回退「全部」再定位（3.3.2 舞台联动）
+    if (!el && App.layout.panel === 'gonglue') {
+      UIPanel.setRosterTab('all');
+      el = $('panel-body').querySelector('.card[data-id="' + id + '"]');
+    }
     pendingFocus = null;
-    if (el) el.scrollIntoView({ block: 'center' });
+    if (el) {
+      el.scrollIntoView({ block: 'center' });
+      UIPanel.openNpcModal(id);
+    }
   }
 
   function togglePanel(name) {
@@ -158,16 +167,29 @@
     if (App.layout.panel) UIPanel.render(App.layout.panel);
   }
 
+  // ── 浮字坐标（Wave1-B 窄条适配）：取舞台可视区中心/底缘，随滚动与吸附边自适应 ──
+  function stageWrap() { return document.getElementById('stage-wrap'); }
+  function fxCtr(dyUp) {
+    const w = stageWrap();
+    if (!w) return [window.innerWidth / 2, App.layout.barH - dyUp];
+    return [w.scrollLeft + w.clientWidth / 2, w.clientHeight - dyUp];
+  }
+  function fxY(dyUp) {
+    const w = stageWrap();
+    return w ? w.clientHeight - dyUp : App.layout.barH - dyUp;
+  }
+
   // ── 掉落拾取 ──
   function collectDrop(uid, crit) {
     const st = App.state;
     if (!st) return;
     const r = Engine.collectDrop(st, uid, !!crit);
     if (r && r.ok) {
-      (r.events || []).forEach(function (e) {
-        if (e.t === 'collect' && e.txt) Fx.add(e.txt, window.innerWidth / 2, App.layout.barH - 40, crit ? '#ffe9a8' : '#9fe8c8');
-      });
-      if (crit) Fx.add('暴击 ×2!', window.innerWidth / 2, App.layout.barH - 62, '#ffd76a', true);
+      App.eventFx(r.events || []);
+      if (crit) {
+        const c = fxCtr(62);
+        Fx.add('暴击 ×2!', c[0], c[1], '#ffd76a', true);
+      }
       UIBar.updateHud();
     }
   }
@@ -194,6 +216,7 @@
     function commit() {
       save();
       UIPanel.render(App.layout.panel);
+      UIPanel.refreshModal();
       UIBar.updateHud();
     }
     function fxResult(r) {
@@ -237,7 +260,7 @@
         const r = Engine.spendGift(st, id, ds.size, Date.now());
         if (r.ok) {
           App.eventFx([{ t: 'favor', id: id, gain: r.gain }].concat(r.events || []));
-          Fx.add('-' + Engine.fmtMoney(r.cost), UIBar.npcStageX(id), App.layout.barH - 70, '#ff9a9a');
+          Fx.add('-' + Engine.fmtMoney(r.cost), UIBar.npcStageX(id), fxY(70), '#ff9a9a');
         } else App.notify(r.msg, 2000);
         commit();
         break;
@@ -246,7 +269,7 @@
         const r = Engine.spendDate(st, id, ds.kind, Number(ds.v), Date.now());
         if (r.ok) {
           App.eventFx([{ t: 'favor', id: id, gain: r.gain }].concat(r.events || []));
-          Fx.add('-' + Engine.fmtMoney(r.cost), UIBar.npcStageX(id), App.layout.barH - 70, '#ff9a9a');
+          Fx.add('-' + Engine.fmtMoney(r.cost), UIBar.npcStageX(id), fxY(70), '#ff9a9a');
         } else App.notify(r.msg, 2000);
         commit();
         break;
@@ -254,14 +277,40 @@
       case 'errand': {
         const r = Engine.spendErrand(st, id, Date.now());
         fxResult(r);
-        if (r.ok) Fx.add('-' + Engine.fmtMoney(r.cost), UIBar.npcStageX(id), App.layout.barH - 70, '#ff9a9a');
+        if (r.ok) Fx.add('-' + Engine.fmtMoney(r.cost), UIBar.npcStageX(id), fxY(70), '#ff9a9a');
         commit();
         break;
       }
-      case 'card-toggle':
-        UIPanel.toggleCard(id);
+      case 'npc-open':
+        UIPanel.openNpcModal(id);
+        break;
+      case 'item-open':
+        UIPanel.openItemModal(Number(ds.idx));
+        break;
+      case 'bag-tab':
+        UIPanel.setBagTab(ds.t);
+        break;
+      case 'roster-tab':
+        UIPanel.setRosterTab(ds.t);
+        break;
+      case 'synth-toggle':
+        UIPanel.synthToggle();
+        break;
+      case 'synth-clear':
+        UIPanel.synthClear();
+        break;
+      case 'synth-pick':
+        UIPanel.synthPick(Number(ds.idx));
+        break;
+      case 'synth-run':
+        UIPanel.synthRun();
+        break;
+      case 'cap-buy': {
+        const r = Engine.buyInvCap(st);
+        App.notify(r.msg || (r.ok ? '扩容成功' : '暂时不行'), r.ok ? 2400 : 2200);
         commit();
         break;
+      }
       case 'use-item': {
         const idx = Number(ds.idx);
         const target = ds.target;
@@ -392,10 +441,12 @@
 
   // ── 事件特效 ──
   function eventFx(events) {
+    // 同批拾取：autosell 已有专属浮字，collect 里同文案的不再重复画
+    const hasAutosell = (events || []).some(function (x) { return x.t === 'autosell'; });
     (events || []).forEach(function (e) {
       const def = e.id ? NPC_BY_ID[e.id] : null;
-      const x = e.id ? UIBar.npcStageX(e.id) : window.innerWidth / 2;
-      const y = App.layout.barH - 64;
+      const x = e.id ? UIBar.npcStageX(e.id) : fxCtr(64)[0];
+      const y = fxY(64);
       switch (e.t) {
         case 'favor':
           if (e.gain > 0) Fx.add('好感 +' + (Math.round(e.gain * 10) / 10), x, y, '#9fe8c8');
@@ -410,19 +461,22 @@
           }
           break;
         }
-        case 'full':
-          Fx.add((def ? def.name : '') + ' 资产上线！', x, y, '#ffe9a8', true);
+        case 'full': {
+          const fc = def ? [x, y] : fxCtr(76);
+          Fx.add((def ? def.name : '') + ' 资产上线！', fc[0], fc[1], '#ffe9a8', true);
           if (TEXTS.full[e.id]) App.notify(TEXTS.full[e.id], 6000);
           break;
+        }
         case 'refer': {
           const rd = NPC_BY_ID[e.id];
-          if (rd) Fx.add('引荐解锁 ' + rd.name, x, y, '#5ac8b0', true);
+          if (rd) Fx.add('引荐解锁 ' + rd.name, UIBar.npcStageX(e.id), y, '#5ac8b0', true);
           break;
         }
-        case 'tier':
-          Fx.add('进入 ' + Engine.tierDef(e.tier).name + '！',
-            window.innerWidth / 2, App.layout.barH - 70, '#ffe9a8', true);
+        case 'tier': {
+          const tc = fxCtr(72);
+          Fx.add('进入 ' + Engine.tierDef(e.tier).name + '！', tc[0], tc[1], '#ffe9a8', true);
           break;
+        }
         case 'stage': {
           if (def) {
             const pool = TEXTS.stage[e.to] || [];
@@ -454,8 +508,28 @@
         case 'drop':
           UIBar.spawnDrop(e);
           break;
-        case 'collect':
+        case 'collect': {
+          if (hasAutosell && (e.txt || '').indexOf('自动售出') === 0) break;
+          const cc = fxCtr(44);
+          Fx.add(e.txt || '', cc[0], cc[1], (e.txt || '').indexOf('暴击') >= 0 ? '#ffe9a8' : '#9fe8c8');
           break;
+        }
+        case 'autosell': {
+          const ac = fxCtr(56);
+          Fx.add(e.txt || '自动售出', ac[0], ac[1], '#ffd76a');
+          break;
+        }
+        case 'ach': {
+          const vc = fxCtr(88);
+          Fx.add('🏆 成就达成：' + e.name, vc[0], vc[1], '#ffe9a8', true);
+          if (allowNotify()) App.notify('成就达成「' + e.name + '」：' + e.perkText, 5200);
+          break;
+        }
+        case 'synth': {
+          const sc = fxCtr(80);
+          Fx.add(e.txt || '', sc[0], sc[1], '#7adec6', true);
+          break;
+        }
         case 'item':
           if (e.txt && allowNotify()) App.notify(e.txt, 3600);
           break;

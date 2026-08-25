@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- 面板区：向上展开 420px，panel-open 时显示 -->
+  <!-- 面板区：展开方向随 data-side 翻转（贴底向上 / 贴顶向下 / 竖条向屏内） -->
   <div id="panel">
     <div id="panel-head">
       <span id="panel-title"></span>
@@ -15,23 +15,65 @@
     <div id="panel-body"></div>
   </div>
 
-  <!-- 底部通栏主条：贴任务栏常驻 -->
+  <!-- 主条：可贴四边 / 悬浮，宽度 1/5 ↔ 全宽 -->
   <div id="bar">
+    <!-- 拖拽挪动手柄（HUD 左侧） -->
+    <div id="grabber" title="拖拽挪动位置">⠿</div>
+
     <div id="hud">
-      <div><span id="hud-gold">💰 0</span></div>
-      <div><span id="hud-rep">🏅 0</span></div>
-      <div class="stam-line"><span id="hud-stam">⚡ 100/100</span><span class="stam-track"><i id="stam-bar"></i></span></div>
-      <div><span id="hud-inc">收入 0/秒</span></div>
+      <div class="hud-row gold-row"><span id="hud-gold">💰 0</span></div>
+      <div class="hud-row rep-row"><span id="hud-rep">🏅 0</span></div>
+      <div class="hud-row stam-line"><span id="hud-stam">⚡ 100/100</span><span class="stam-track"><i id="stam-bar"></i></span></div>
+      <div class="hud-row inc-row"><span id="hud-inc">收入 0/秒</span></div>
     </div>
-    <div id="stage-wrap"><canvas id="stage"></canvas></div>
+
+    <!-- 舞台：窄条时横向滚动（边缘渐隐 + 步进箭头；box 不滚、wrap 滚） -->
+    <div id="stage-box">
+      <div id="stage-wrap"><canvas id="stage"></canvas></div>
+      <div class="fade fade-l"></div>
+      <div class="fade fade-r"></div>
+      <button class="st-arrow st-prev" data-dir="-1" title="向左看">◀</button>
+      <button class="st-arrow st-next" data-dir="1" title="向右看">▶</button>
+    </div>
+
     <div id="actions">
+      <button id="act-more" title="功能页签">☰</button>
       <button data-panel="gonglue">攻略</button>
       <button data-panel="beibao">背包</button>
       <button data-panel="gongzuo">工作</button>
       <button data-panel="shuxing">属性</button>
       <button data-panel="quanceng">圈层</button>
       <button data-panel="shezhi">设置</button>
+      <!-- tiny 档收纳菜单（绝对定位，点外关闭） -->
+      <div id="act-menu" class="hidden">
+        <button data-panel="gonglue">攻略</button>
+        <button data-panel="beibao">背包</button>
+        <button data-panel="gongzuo">工作</button>
+        <button data-panel="shuxing">属性</button>
+        <button data-panel="quanceng">圈层</button>
+        <button data-panel="shezhi">设置</button>
+      </div>
     </div>
+
+    <!-- 调宽热区：横条用左右，竖条用上下 -->
+    <div class="rz rz-l" data-edge="l"></div>
+    <div class="rz rz-r" data-edge="r"></div>
+    <div class="rz rz-t" data-edge="t"></div>
+    <div class="rz rz-b" data-edge="b"></div>
+  </div>
+
+  <!-- NPC 悬停气泡（全局轻量组件，跟随鼠标） -->
+  <div id="tip" class="hidden"></div>
+
+  <!-- 右键菜单：宽度四档 + 重置位置 -->
+  <div id="ctx-menu" class="hidden">
+    <div class="ctx-title">条宽</div>
+    <button class="ctx-item" data-wrp="0.2">1/5 屏</button>
+    <button class="ctx-item" data-wrp="0.3333">1/3 屏</button>
+    <button class="ctx-item" data-wrp="0.5">1/2 屏</button>
+    <button class="ctx-item" data-wrp="1">全宽</button>
+    <div class="ctx-sep"></div>
+    <button class="ctx-item" data-role="reset">重置位置</button>
   </div>
 
   <div id="toast" class="hidden"></div>

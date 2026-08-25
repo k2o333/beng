@@ -7,15 +7,32 @@
   const STAGE_BADGE = { ice: '破冰', warm: '升温', deep: '深交', close: '收网' };
   const Q_TXT = { common: '普通', fine: '精致', rare: '稀有' };
 
+  // Wave2-U：分类页签 / 合成多选 / 详情弹窗（UI 侧状态，不入档）
+  const BAG_TABS = [['all', '全部'], ['gift', '礼物'], ['consume', '消耗'], ['ticket', '票券'], ['func', '功能']];
+  const KIND_TAB_MAP = {
+    gift: ['send_gift', 'send_favor'],
+    consume: ['stamina', 'favor_random', 'favor_all', 'rep'],
+    ticket: ['free_date'],
+    func: ['buff_date', 'buff_attr', 'unlock_next']
+  };
+  const ROSTER_TABS = [['all', '全部'], ['available', '可攻略'], ['courting', '攻略中'], ['asset', '人脉资产'], ['referred', '已引荐']];
+  let bagTab = 'all';
+  let rosterTab = 'all';
+  let synthMode = false;
+  let synthSel = {};       // invIdx -> 已选件数
+  let synthBusy = false;   // 合成期间防重复点击
+  let modalCtx = null;     // {kind:'item'|'npc', idx|id} 弹窗原地刷新用
+  let resetScrollNext = false;
+
   let body = null;
   let titleEl = null;
   let cur = null;
   let keepScroll = 0;
   let confirmCb = null;
-  let expanded = {};       // 卡片展开态（UI 侧，不入档）
   let pendingOffline = null;
 
-  function toggleCard(id) { expanded[id] = !expanded[id]; }
+  function setBagTab(t) { bagTab = t; synthMode = false; synthSel = {}; resetScrollNext = true; App.refreshPanel(); }
+  function setRosterTab(t) { rosterTab = t; resetScrollNext = true; App.refreshPanel(); }
 
   function nsOf(st, id) {
     return st.npcs[id] || { favor: 0, claimed: [], asset: false, referred: false };
@@ -48,6 +65,25 @@
       let v = el.type === 'checkbox' ? el.checked : el.value;
       App.setSetting(el.dataset.set, v);
     });
+    // 悬停 tooltip（window.Tip，B 侧全局组件；背包格与名册卡）
+    body.addEventListener('mouseover', function (e) {
+      const el = e.target.closest('[data-tip]');
+      if (!el || !body.contains(el)) return;
+      const html = tipHtmlFor(el.dataset.tip);
+      if (html && window.Tip) window.Tip.show(html, e.clientX, e.clientY);
+    });
+    body.addEventListener('mousemove', function (e) {
+      const el = e.target.closest('[data-tip]');
+      const t = document.getElementById('tip');
+      if (el && t && !t.classList.contains('hidden') && window.Tip) window.Tip.move(e.clientX, e.clientY);
+    });
+    body.addEventListener('mouseout', function (e) {
+      const el = e.target.closest('[data-tip]');
+      if (!el) return;
+      const rel = e.relatedTarget && e.relatedTarget.closest ? e.relatedTarget.closest('[data-tip]') : null;
+      if (rel === el) return;   // 同一格子内移动不闪断
+      if (window.Tip) window.Tip.hide();
+    });
     const card = document.getElementById('overlay-card');
     card.addEventListener('click', function (e) {
       const el = e.target.closest('[data-action]');
@@ -69,6 +105,7 @@
       return;
     }
     keepScroll = body.scrollTop;
+    if (resetScrollNext) { keepScroll = 0; resetScrollNext = false; }
     titleEl.textContent = TITLES[cur];
     if (cur === 'gonglue') body.innerHTML = htmlGonglue();
     else if (cur === 'beibao') body.innerHTML = htmlBeibao();
@@ -109,9 +146,14 @@
     h += '<div class="budget-line" id="budget-line">' + budgetText() + '</div>';
     h += '</div>';
 
+    // 状态分类页签（3.3.2：跨圈层筛选，配合圈层分组头双维定位）
+    h += tabsHtml(ROSTER_TABS, rosterTab, 'roster-tab');
+
     for (let t = 1; t <= BALANCE.TIERS.length; t++) {
       const td = Engine.tierDef(t);
       const open = Engine.tierOpen(st, t);
+      const defs = NPCS.filter((def) => def.tier === t && rosterMatch(st, def));
+      if (!defs.length && rosterTab !== 'all') continue;
       h += '<div class="tier-head' + (open ? '' : ' locked') + '">'
         + '<span class="tier-name">' + td.name + '</span>'
         + '<span class="tier-mult">产出 ×' + td.mult + '</span>';
@@ -121,9 +163,9 @@
           + (c.miss.length ? '需：' + c.miss.join('、') : '条件已达成，可入场') + '</span>';
       }
       h += '</div>';
-      for (const def of NPCS) {
-        if (def.tier === t) h += cardHtml(st, def, open);
-      }
+      h += '<div class="roster-grid">';
+      defs.forEach((def) => { h += cardHtml(st, def, open); });
+      h += '</div>';
     }
 
     // 决策日志（04 §6）
@@ -153,51 +195,32 @@
     return parts.join(' · ');
   }
 
+  // 网格卡片（3.3.2）：头像+名字+类型/tier+迷你好感条+状态文案；整卡点击开详情弹窗
+  function rosterMatch(st, def) {
+    if (rosterTab === 'all') return true;
+    const status = statusOf(st, def);
+    const ns = nsOf(st, def.id);
+    if (rosterTab === 'referred') return !!ns.referred && status !== 'asset';
+    return status === rosterTab;
+  }
+
   function cardHtml(st, def, open) {
     const ns = nsOf(st, def.id);
     const status = statusOf(st, def);
     const tc = Engine.tierDef(def.tier).color;
-    const isExp = !!expanded[def.id];
 
-    let ops = '';
-    if (status === 'available') {
-      const full = st.slots.length >= st.slotCount;
-      ops = '<button class="btn primary" data-action="slot-add" data-id="' + def.id + '"'
-        + (full ? ' disabled' : '') + '>入槽</button>';
-    } else if (status === 'courting') {
-      const stg = Agent.stageOf(ns.favor);
-      const pause = Agent.pauseReason(st, def.id);
-      const cost = st.settings.interactStaminaCost;
-      ops = '<button class="btn primary" data-action="interact" data-id="' + def.id + '"'
-        + (Engine.onDuty(st) ? ' disabled title="在岗时段只能动嘴"' : '') + '>互动 -' + cost + '⚡</button>';
-      ops += '<button class="btn" data-action="wechat" data-id="' + def.id + '" title="微信聊天 +2，30分冷却">微信</button>';
-      ops += '<button class="btn toggle' + (isExp ? ' on' : '') + '" data-action="card-toggle" data-id="' + def.id + '">'
-        + (isExp ? '收起' : STAGE_BADGE[stg.key] + '▾') + '</button>';
-      ops += '<button class="btn danger" data-action="slot-remove" data-id="' + def.id + '">请离</button>';
-    } else if (status === 'asset') {
-      const gps = BALANCE.BASE_OUTPUT[def.type] * Engine.tierDef(def.tier).mult * def.coef;
-      ops = '<span class="asset-line" title="随机掉落口径：每包有波动，长期期望对齐">掉落期望 '
-        + Engine.fmtMoney(gps * 3600) + '/时</span>';
-    } else {
-      ops = '<span class="lock-line">需进入 ' + Engine.tierDef(def.tier).name + '</span>';
-    }
-
-    const refBadge = ns.referred && !open && status !== 'asset'
-      ? '<span class="ref-badge">引荐</span>' : '';
-
-    let h = '<div class="card" data-id="' + def.id + '">'
+    let h = '<div class="card' + (open ? '' : ' dimmed') + '" data-action="npc-open" data-id="' + def.id
+      + '" data-tip="n:' + def.id + '">'
       + '<canvas class="avatar" width="48" height="32"></canvas>'
       + '<div class="info">'
       + '<div class="name-row"><span class="name">' + def.name + '</span>'
       + '<span class="chip type-' + def.type + '">' + TYPE_TXT[def.type] + '</span>'
-      + '<span class="ttag">T' + def.tier + '</span>' + refBadge + '</div>'
+      + '<span class="ttag">T' + def.tier + '</span>'
+      + (ns.referred && !ns.asset ? '<span class="ref-badge">引荐</span>' : '') + '</div>'
       + '<div class="fav"><i style="width:' + Math.min(100, ns.favor) + '%;background:' + tc + '"></i></div>'
       + '<div class="favtext" data-role="favtext">' + favText(st, def, ns, status) + '</div>'
       + '</div>'
-      + '<div class="ops">' + ops + '</div>'
       + '</div>';
-
-    if (status === 'courting' && isExp) h += detailHtml(st, def, ns);
     return h;
   }
 
@@ -212,8 +235,8 @@
     return esc(t);
   }
 
-  // 展开区：档案卡六行（03 §3）+ 消费菜单 + 渠道动作
-  function detailHtml(st, def, ns) {
+  // 档案卡六行（03 §3）：详情弹窗与旧展开区共用
+  function npcDossierHtml(st, def, ns) {
     const dos = TEXTS.dossier[def.id] || { bio: '', value: '' };
     const intel = st.intel[def.id] || {};
     const tags = def.tags.concat(intel.third ? ['+' + def.third] : []);
@@ -229,8 +252,7 @@
     const midPrice = Engine.priceOf(st, 'gift', 'mid', def.tier);
     const costTxt = '矜持 ×' + Engine.tierDef(def.tier).restraint + ' · 中礼基准 ' + Engine.fmtMoney(midPrice);
 
-    let h = '<div class="detail">';
-    h += '<div class="dossier"><b>【小传】</b>' + esc(dos.bio) + '</div>';
+    let h = '<div class="dossier"><b>【小传】</b>' + esc(dos.bio) + '</div>';
     h += '<div class="dossier"><b>【产出】</b>' + outputTxt + '</div>';
     h += '<div class="dossier"><b>【引荐】</b>' + referTxt + '</div>';
     h += '<div class="dossier"><b>【成本】</b>' + costTxt + '</div>';
@@ -238,8 +260,6 @@
       + (intel.line ? '（引荐线索已揭示）' : '')
       + (intel.mine ? ' <i class="mine">雷区：' + esc(def.mine) + '</i>' : '') + '</div>';
     h += '<div class="dossier gold"><b>【一句价值】</b>' + esc(dos.value) + '</div>';
-    h += '<div class="spend-menu">' + spendMenu(st, def, ns) + '</div>';
-    h += '</div>';
     return h;
   }
 
@@ -309,31 +329,145 @@
     });
   }
 
-  // ══ 背包 ══
+  // ══ 背包（3.3.1：网格 + 分类页签 + 堆叠 + 合成）══
+  function tabsHtml(defs, curTab, act) {
+    let h = '<div class="page-tabs">';
+    defs.forEach(([v, label]) => {
+      h += '<button class="btn' + (v === curTab ? ' on' : '') + '" data-action="' + act + '" data-t="' + v + '">'
+        + label + '</button>';
+    });
+    return h + '</div>';
+  }
+
+  function invEntry(st, idx) {
+    const e = st.inv[idx];
+    return e && ITEM_BY_ID[e.it] ? e : null;
+  }
+
   function htmlBeibao() {
     const st = App.state;
-    let h = '<div class="set-label">背包 ' + st.inv.length + '/' + BALANCE.LOOT.INV_CAP
-      + '（满了优先挤普通品质；出售折价 30%）</div>';
-    if (!st.inv.length) {
-      h += '<div class="lock-line">空空如也——人脉资产会随机掉落物品，约会惊喜与 NPC 回礼也会送东西。</div>';
+    const cap = Engine.invCap(st);
+    let h = '<div class="set-label">背包 ' + st.inv.length + '/' + cap + ' 格'
+      + '（同名同品质堆叠 ×99；满了优先挤普通品质；出售折价 30%）</div>';
+
+    h += tabsHtml(BAG_TABS, bagTab, 'bag-tab');
+
+    // 合成条：多选凑满 3 件同品质 → 高一档随机物品（next-iteration §1）
+    const selTotal = selUnits();
+    const selGrade = selGradeOf(st);
+    const canSynth = !synthBusy && selTotal === BALANCE.SYNTH.NEED && !!selGrade && selGrade !== 'rare';
+    h += '<div class="synth-bar">';
+    h += '<button class="btn toggle' + (synthMode ? ' on' : '') + '" data-action="synth-toggle">合成 3合1</button>';
+    if (synthMode) {
+      h += '<span class="hint">点选物品凑满 ' + BALANCE.SYNTH.NEED + ' 件同品质（当前 '
+        + selTotal + (selGrade ? ' · ' + Q_TXT[selGrade] : '') + '）</span>';
+      h += '<button class="btn" data-action="synth-clear"' + (selTotal ? '' : ' disabled') + '>清空</button>';
+      h += '<button class="btn primary" data-action="synth-run"' + (canSynth ? '' : ' disabled') + '>合成'
+        + (selGrade && selGrade !== 'rare' ? ' → ' + Q_TXT[BALANCE.NEXT_GRADE[selGrade]] : '') + '</button>';
     }
+    h += '</div>';
+
+    const list = [];
     st.inv.forEach((e, idx) => {
       const it = ITEM_BY_ID[e.it];
       if (!it) return;
-      const sell = Math.max(1, Math.round(it.sell * BALANCE.LOOT.SELL_RATE));
-      const needsTarget = ['send_favor', 'send_gift', 'free_date'].indexOf(it.effect.kind) >= 0;
-      h += '<div class="bag-row">'
-        + '<span class="bag-icon q-' + e.q + '">' + it.icon + '</span>'
-        + '<span class="bag-info"><b>' + it.label + '</b>'
-        + '<i class="qtag q-' + e.q + '">' + Q_TXT[e.q] + '</i>'
-        + '<em>' + esc(it.desc) + '</em></span>'
-        + '<span class="bag-ops">'
-        + '<button class="btn" data-action="use-item" data-idx="' + idx + '"'
-        + (needsTarget ? '' : '') + '>' + (needsTarget ? '使用…' : '使用') + '</button>'
-        + '<button class="btn" data-action="sell-item" data-idx="' + idx + '">售 ' + sell + '</button>'
-        + '</span></div>';
+      if (bagTab !== 'all' && (KIND_TAB_MAP[bagTab] || []).indexOf(it.effect.kind) < 0) return;
+      list.push({ e, idx, it });
     });
+    if (!list.length) {
+      h += '<div class="lock-line">' + (st.inv.length
+        ? '该分类下暂无物品——换个页签看看。'
+        : '空空如也——人脉资产会随机掉落物品，约会惊喜与 NPC 回礼也会送东西。') + '</div>';
+    } else {
+      h += '<div class="bag-grid">';
+      list.forEach(({ e, idx, it }) => {
+        const n = e.n || 1;
+        const picked = synthSel[idx] || 0;
+        h += '<div class="bag-cell q-' + e.q + (picked ? ' sel' : '') + '"'
+          + ' data-action="' + (synthMode ? 'synth-pick' : 'item-open') + '" data-idx="' + idx + '"'
+          + ' data-tip="i:' + idx + '">'
+          + it.icon
+          + (n > 1 ? '<b class="n">' + n + '</b>' : '')
+          + (picked ? '<b class="pk">×' + picked + '</b>' : '')
+          + '</div>';
+      });
+      h += '</div>';
+    }
     return h;
+  }
+
+  function selUnits() {
+    let s = 0;
+    for (const k in synthSel) s += synthSel[k];
+    return s;
+  }
+  function selGradeOf(st) {
+    for (const k in synthSel) {
+      const e = st.inv[k];
+      if (e) return e.q;
+    }
+    return null;
+  }
+
+  function synthToggle() { synthMode = !synthMode; synthSel = {}; resetScrollNext = true; App.refreshPanel(); }
+  function synthClear() { synthSel = {}; App.refreshPanel(); }
+  function synthPick(idx) {
+    const st = App.state;
+    const e = invEntry(st, idx);
+    if (!e) return;
+    const n = e.n || 1;
+    const curPicked = synthSel[idx] || 0;
+    if (curPicked > 0 && (curPicked >= n || selUnits() >= BALANCE.SYNTH.NEED)) delete synthSel[idx];
+    else if (curPicked < n && selUnits() < BALANCE.SYNTH.NEED) synthSel[idx] = curPicked + 1;
+    App.refreshPanel();
+  }
+  function synthRun() {
+    if (synthBusy) return;
+    const st = App.state;
+    const grade = selGradeOf(st);
+    if (selUnits() !== BALANCE.SYNTH.NEED || !grade || grade === 'rare') return;
+    const picks = [];
+    for (const k in synthSel) picks.push({ i: Number(k), n: synthSel[k] });
+    synthBusy = true;
+    let r;
+    try { r = Engine.synthItems(st, picks, Math.random); } finally { synthBusy = false; }
+    if (r.ok) {
+      synthSel = {};
+      App.eventFx([{ t: 'synth', txt: r.txt }]);
+      App.save();
+    } else {
+      App.notify(r.msg || '合成失败', 2200);
+    }
+    App.refreshPanel();
+    UIBar.updateHud();
+  }
+
+  // 悬停 tooltip 数据源（3.3.3：轻量 div，数据取自 dossier/items）
+  function tipHtmlFor(spec) {
+    const st = App.state;
+    if (!st) return '';
+    const colon = spec.indexOf(':');
+    const kind = spec.slice(0, colon);
+    const key = spec.slice(colon + 1);
+    if (kind === 'i') {
+      const e = invEntry(st, Number(key));
+      if (!e) return '';
+      const it = ITEM_BY_ID[e.it];
+      return '<b>' + esc(it.label) + '</b>'
+        + '<span>' + Q_TXT[e.q] + ' · ' + esc(it.desc) + '</span>'
+        + '<span class="tip-fav">售价 ' + Engine.fmtMoney(Engine.sellUnitPrice(it)) + '/件'
+        + ((e.n || 1) > 1 ? ' · ×' + e.n : '') + '</span>';
+    }
+    if (kind === 'n') {
+      const def = NPC_BY_ID[key];
+      if (!def) return '';
+      const ns = nsOf(st, def.id);
+      const status = statusOf(st, def);
+      return '<b>' + esc(def.name) + '</b>'
+        + '<span>' + TYPE_TXT[def.type] + '·T' + def.tier + ' · ' + STATUS_TXT[status] + '</span>'
+        + '<span class="tip-fav">好感 ' + Math.floor(ns.favor) + '/100</span>';
+    }
+    return '';
   }
 
   // ══ 工作 ══
@@ -434,6 +568,23 @@
         + '" data-cost="' + cost + '"' + (st.gold < cost ? ' disabled' : '')
         + '>升级 ' + Engine.fmtMoney(cost) + (half ? ' <s>5折</s>已备' : '') + '</button></div>';
     });
+    // 成就分组（next-iteration §2）：达成即永久被动
+    h += '<div class="set-group"><div class="set-label">成就（达成即永久被动，账号级生效）</div>';
+    BALANCE.ACHIEVEMENTS.forEach(function (a) {
+      const lit = !!st.perks[a.id];
+      const v = a.stat === 'assets' ? Engine.assetCount(st) : (st.stats[a.stat] || 0);
+      const prog = a.stat === 'totalWorkMs'
+        ? Math.floor(v / 3600000) + '/' + Math.round(a.goal / 3600000) + ' 小时'
+        : Math.floor(v) + '/' + a.goal;
+      h += '<div class="ach-row' + (lit ? ' lit' : ' locked') + '"><div class="ai">'
+        + '<b>' + a.name + '</b><i class="qtag ' + (lit ? 'q-rare' : '') + '">' + (lit ? '已达成' : '未达成') + '</i>'
+        + '<em>' + esc(a.desc) + '（进度 ' + prog + '）</em>'
+        + '<em class="perk">被动：' + esc(a.perkText) + (lit ? ' · 生效中' : '') + '</em>'
+        + (a.flavor ? '<em class="flavor">' + esc(a.flavor) + '</em>' : '')
+        + '</div></div>';
+    });
+    h += '</div>';
+
     h += '<div class="set-row" style="margin-top:10px">'
       + '<button class="btn" data-action="admin-open">管理后台（导演模式）</button></div>';
     return h;
@@ -498,7 +649,25 @@
       + '<option value="auto"' + (st.settings.invitePolicy === 'auto' ? ' selected' : '') + '>自动接受</option>'
       + '<option value="ask"' + (st.settings.invitePolicy === 'ask' ? ' selected' : '') + '>先问我</option>'
       + '</select></label>'
+      + '<label class="check">自动出售 <select data-set="autoSellGrade" title="拾取时低于等于该品质的物品直接折价出售（next-iteration §4.1）">'
+      + '<option value="off"' + (st.settings.autoSellGrade === 'off' ? ' selected' : '') + '>关闭</option>'
+      + '<option value="common"' + (st.settings.autoSellGrade === 'common' ? ' selected' : '') + '>普通及以下</option>'
+      + '<option value="fine"' + (st.settings.autoSellGrade === 'fine' ? ' selected' : '') + '>精致及以下</option>'
+      + '</select></label>'
       + '</div></div>';
+
+    // 背包扩容金币坑（next-iteration §4）
+    const capLv = st.capLevel || 0;
+    h += '<div class="set-group"><div class="set-label">背包</div><div class="set-row">'
+      + '<span>当前容量 ' + Engine.invCap(st) + ' 格</span>';
+    if (capLv >= BALANCE.INV_CAP_UPGRADES.length) {
+      h += '<button class="btn" disabled>已达最大扩容</button>';
+    } else {
+      const up = BALANCE.INV_CAP_UPGRADES[capLv];
+      h += '<button class="btn primary" data-action="cap-buy"' + (st.gold < up.cost ? ' disabled' : '')
+        + '>扩容至 ' + up.cap + ' 格 ' + Engine.fmtMoney(up.cost) + '</button>';
+    }
+    h += '</div></div>';
 
     h += '<div class="set-group"><div class="set-label">系统</div><div class="set-row">'
       + '<label class="check"><input type="checkbox" data-action="autostart-toggle"'
@@ -645,10 +814,12 @@
 
   // ── 弹窗 ──
   function openOverlay(html) {
+    modalCtx = null;
     document.getElementById('overlay-card').innerHTML = html;
     document.getElementById('overlay').classList.remove('hidden');
   }
   function closeOverlay() {
+    modalCtx = null;
     document.getElementById('overlay').classList.add('hidden');
     document.getElementById('overlay-card').innerHTML = '';
   }
@@ -674,6 +845,96 @@
     });
     h += '<button class="btn" data-action="confirm-cancel">取消</button></div>';
     openOverlay(h);
+  }
+
+  // 详情弹窗（3.3.1/3.3.2）：操作聚合，操作后原地刷新不关窗
+  function needsTargetOf(it) { return ['send_favor', 'send_gift', 'free_date'].indexOf(it.effect.kind) >= 0; }
+
+  function itemModalHtml(st, idx, e) {
+    const it = ITEM_BY_ID[e.it];
+    const n = e.n || 1;
+    const unit = Engine.sellUnitPrice(it);
+    let h = '<h3 class="ov-title">物品详情</h3>'
+      + '<div class="ov-item-head">'
+      + '<span class="bag-cell static q-' + e.q + '">' + it.icon
+      + (n > 1 ? '<b class="n">' + n + '</b>' : '') + '</span>'
+      + '<div class="ii">'
+      + '<div class="name-row"><b>' + esc(it.label) + '</b><i class="qtag q-' + e.q + '">' + Q_TXT[e.q] + '</i></div>'
+      + '<em>' + esc(it.desc) + '</em>'
+      + '<em class="dim">来源：' + esc(it.src || '—') + '</em>'
+      + '<em class="dim">售价 ' + Engine.fmtMoney(unit) + '/件</em>'
+      + '</div></div>';
+    h += '<div class="ov-btns" style="justify-content:flex-start">'
+      + '<button class="btn primary" data-action="use-item" data-idx="' + idx + '">'
+      + (needsTargetOf(it) ? '使用…' : '使用') + '</button>'
+      + '<button class="btn" data-action="sell-item" data-idx="' + idx + '">'
+      + '出售整堆 +' + Engine.fmtMoney(unit * n) + '</button>'
+      + '<button class="btn" data-action="confirm-cancel">关闭</button>'
+      + '</div>';
+    return h;
+  }
+  function openItemModal(idx) {
+    const st = App.state;
+    const e = invEntry(st, Number(idx));
+    if (!e) return;
+    openOverlay(itemModalHtml(st, Number(idx), e));
+    modalCtx = { kind: 'item', idx: Number(idx), it: e.it, q: e.q };
+  }
+
+  function npcModalHtml(st, def) {
+    const ns = nsOf(st, def.id);
+    const status = statusOf(st, def);
+    let h = '<h3 class="ov-title">' + esc(def.name)
+      + ' <i class="qtag type-' + def.type + '">' + TYPE_TXT[def.type] + ' · T' + def.tier + '</i>'
+      + ' <i class="qtag">' + STATUS_TXT[status] + '</i>'
+      + (ns.referred && !ns.asset ? ' <i class="ref-badge">引荐</i>' : '') + '</h3>';
+    h += '<div class="menu-row">';
+    if (status === 'available') {
+      const full = st.slots.length >= st.slotCount;
+      h += '<button class="btn primary" data-action="slot-add" data-id="' + def.id + '"'
+        + (full ? ' disabled' : '') + '>入槽</button>';
+    } else if (status === 'courting') {
+      const cost = st.settings.interactStaminaCost;
+      h += '<button class="btn primary" data-action="interact" data-id="' + def.id + '"'
+        + (Engine.onDuty(st) ? ' disabled title="在岗时段只能动嘴"' : '') + '>互动 -' + cost + '⚡</button>';
+      h += '<button class="btn" data-action="wechat" data-id="' + def.id + '" title="微信聊天 +2，30分冷却">微信</button>';
+      h += '<button class="btn danger" data-action="slot-remove" data-id="' + def.id + '">请离</button>';
+      const pr = Agent.pauseReason(st, def.id);
+      if (pr) h += '<span class="ov-hint">暂缓：' + esc(pr) + '</span>';
+    } else if (status === 'asset') {
+      const gps = BALANCE.BASE_OUTPUT[def.type] * Engine.tierDef(def.tier).mult * def.coef;
+      h += '<span class="asset-line" title="随机掉落口径：每包有波动，长期期望对齐">掉落期望 '
+        + Engine.fmtMoney(gps * 3600) + '/时</span>';
+    } else {
+      h += '<span class="lock-line">需进入 ' + Engine.tierDef(def.tier).name + '</span>';
+    }
+    h += '</div>';
+    h += npcDossierHtml(st, def, ns);
+    if (status === 'courting') h += '<div class="spend-menu">' + spendMenu(st, def, ns) + '</div>';
+    h += '<div class="ov-btns"><button class="btn" data-action="confirm-cancel">关闭</button></div>';
+    return h;
+  }
+  function openNpcModal(id) {
+    const def = NPC_BY_ID[id];
+    if (!def) return;
+    openOverlay(npcModalHtml(App.state, def));
+    modalCtx = { kind: 'npc', id };
+  }
+
+  // 原地刷新：commit() 后由 app 调用；条目已消失/已变身份（堆叠左移串位）则关窗
+  function refreshModal() {
+    if (!modalCtx) return;
+    const st = App.state;
+    const card = document.getElementById('overlay-card');
+    if (modalCtx.kind === 'item') {
+      const e = invEntry(st, modalCtx.idx);
+      if (!e || e.it !== modalCtx.it || e.q !== modalCtx.q) { closeOverlay(); return; }
+      card.innerHTML = itemModalHtml(st, modalCtx.idx, e);
+    } else {
+      const def = NPC_BY_ID[modalCtx.id];
+      if (!def) { closeOverlay(); return; }
+      card.innerHTML = npcModalHtml(st, def);
+    }
   }
 
   // 邀约询问（08 §4 ask 模式）
@@ -721,9 +982,13 @@
       html += '<div class="ov-sub">离线包裹（收下进背包）：</div><ul class="ov-favors">';
       report.package.forEach((p) => {
         const it = ITEM_BY_ID[p.it];
-        if (it) html += '<li>' + it.icon + ' ' + it.label + '（' + Q_TXT[p.q] + '）</li>';
+        if (it) html += '<li>' + it.icon + ' ' + it.label + '（' + Q_TXT[p.q]
+          + ((p.n || 1) > 1 ? ' ×' + p.n : '') + '）</li>';
       });
       html += '</ul>';
+    }
+    if (report.soldN > 0) {
+      html += '<p class="ov-line">自动售出 <b class="gain-gold">' + report.soldN + '</b> 件（阈值折价）</p>';
     }
     html += '<div class="ov-btns"><button class="btn primary" data-action="offline-claim">收下</button></div>';
     openOverlay(html);
@@ -732,7 +997,9 @@
     const rep = pendingOffline;
     pendingOffline = null;
     if (rep && rep.package && rep.package.length) {
-      rep.package.forEach((p) => { Engine.invAdd(App.state, p.it, p.q); });
+      const out = Engine.absorbOfflinePackage(App.state, rep.package);
+      const lost = out.filter((o) => !o.ok).length;
+      if (lost) App.notify('背包已满，' + lost + ' 件没能装下', 2800);
       App.save();
     }
     closeOverlay();
@@ -777,8 +1044,10 @@
   }
 
   window.UIPanel = {
-    init, render, updateDynamic, showOffline, confirm, toggleCard,
+    init, render, updateDynamic, showOffline, confirm,
     showItemTarget, showInvite, claimOffline, showExport, showImport, applyImport, copySave,
-    closeOverlay
+    closeOverlay, refreshModal,
+    setBagTab, setRosterTab, synthToggle, synthClear, synthPick, synthRun,
+    openItemModal, openNpcModal
   };
 })();

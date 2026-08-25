@@ -10,5 +10,10 @@ contextBridge.exposeInMainWorld('api', {
   clearSave: () => ipcRenderer.invoke('save:clear'),
   setAutostart: (on) => ipcRenderer.invoke('autostart:set', on),
   getAutostart: () => ipcRenderer.invoke('autostart:get'),
-  onLayout: (cb) => ipcRenderer.on('layout', (e, data) => cb(data))
+  onLayout: (cb) => ipcRenderer.on('layout', (e, data) => cb(data)),
+  getLayout: () => ipcRenderer.invoke('layout:get'),
+  setBarLayout: (patch) => ipcRenderer.invoke('bar:layout', patch || {}),
+  resetBarLayout: () => ipcRenderer.invoke('bar:reset'),
+  barDrag: (phase) => ipcRenderer.invoke('bar:drag', phase),
+  barResize: (phase, edge) => ipcRenderer.invoke('bar:resize', { phase, edge })
 });

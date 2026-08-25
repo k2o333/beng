@@ -50,7 +50,9 @@
       intel: {},                  // id -> { third, line, mine }
       weekReturn: {},
       log: [],
-      stats: { totalWage: 0 }
+      stats: { totalWage: 0, totalInteract: 0, totalWorkMs: 0, totalLoot: 0, totalDates: 0 },
+      perks: {},                  // 成就 id -> true（达成即永久被动，next-iteration §2）
+      capLevel: 0                 // 背包扩容档位（INV_CAP_UPGRADES 下标，§4）
     };
   }
 
@@ -61,9 +63,16 @@
       if (raw.v === B.SAVE_VERSION) {
         raw.settings = mergeSettings(raw.settings);
         if (!Array.isArray(raw.inv)) raw.inv = [];
+        else raw.inv.forEach((e) => { if (typeof e.n !== 'number' || !(e.n > 0)) e.n = 1; });   // 堆叠模型：旧条目按 n=1
         if (!Array.isArray(raw.drops)) raw.drops = [];
         if (!raw.hotspot) raw.hotspot = { day: -1, list: [] };
         raw.customMode = !!raw.customMode;
+        if (!raw.stats || typeof raw.stats !== 'object') raw.stats = {};
+        ['totalWage', 'totalInteract', 'totalWorkMs', 'totalLoot', 'totalDates'].forEach((k) => {
+          if (typeof raw.stats[k] !== 'number') raw.stats[k] = 0;    // 旧档缺字段按 0 计
+        });
+        if (!raw.perks || typeof raw.perks !== 'object') raw.perks = {};
+        if (typeof raw.capLevel !== 'number' || !(raw.capLevel >= 0)) raw.capLevel = 0;
         return raw;
       }
       if (raw.v !== 1) return null;
@@ -115,9 +124,41 @@
   function auxBonus(state) {
     return Math.min(B.AUX_BONUS_CAP, auxAssets(state) * B.AUX_BONUS_PER);
   }
+
+  // ── 成就被动（next-iteration §2）──
+  function assetCount(state) {
+    let c = 0;
+    for (const id in state.npcs) if (state.npcs[id].asset) c++;
+    return c;
+  }
+  function statValue(state, key) {
+    return key === 'assets' ? assetCount(state) : (state.stats[key] || 0);
+  }
+  function checkAchievements(state, events) {
+    events = events || [];
+    for (const a of B.ACHIEVEMENTS) {
+      if (state.perks[a.id]) continue;
+      if (statValue(state, a.stat) >= a.goal) {
+        state.perks[a.id] = true;
+        events.push({ t: 'ach', id: a.id, name: a.name, perkText: a.perkText });
+      }
+    }
+  }
+  // 已解锁成就的乘区叠加
+  function perkMul(state, key) {
+    let m = 1;
+    for (const a of B.ACHIEVEMENTS) if (a[key] && state.perks[a.id]) m *= a[key];
+    return m;
+  }
+  function staminaMaxOf(state) {
+    let max = Number(state.settings.staminaMax) || B.STAMINA_MAX;
+    for (const a of B.ACHIEVEMENTS) if (a.stamMaxAdd && state.perks[a.id]) max += a.stamMaxAdd;
+    return max;
+  }
+
   function autoFavorPerMin(state, def) {
     const t = tierDef(def.tier);
-    return 0.5 * (1 + B.ATTR_EFFECT * state.attrs.charm) / t.restraint * (1 + auxBonus(state));
+    return 0.5 * (1 + B.ATTR_EFFECT * state.attrs.charm) / t.restraint * (1 + auxBonus(state)) * perkMul(state, 'favorMul');
   }
   function interactGain(state, def) {
     return autoFavorPerMin(state, def) * 5 * (1 + B.ATTR_EFFECT * state.attrs.talk);
@@ -173,6 +214,7 @@
       events.push({ t: 'stage', id: def.id, from: prevStage, to: newStage });
     }
     if (s.favor >= B.FAVOR_MAX) toAsset(state, def, events);
+    checkAchievements(state, events);
     return s.favor - before;
   }
 
@@ -206,7 +248,7 @@
     const j = state.job;
     if (!j || !j.id) return 0;
     const def = B.JOBS[j.id];
-    let w = def.wage * state.settings.workWageRate / 3600;
+    let w = def.wage * state.settings.workWageRate / 3600 * perkMul(state, 'wageMul');
     if (j.id === 'restaurant') {
       const h = new Date(nowReal || Date.now()).getHours();
       if (h >= B.EVENING_HOURS[0] && h < B.EVENING_HOURS[1]) w *= def.eveningMul;
@@ -292,6 +334,8 @@
     state.stamina -= cost;
     const events = [];
     const gain = grantFavor(state, def, interactGain(state, def), events);
+    state.stats.totalInteract++;
+    checkAchievements(state, events);
     return { ok: true, gain, events };
   }
 
@@ -325,6 +369,7 @@
       const d = B.SPEND.date[size];
       p = B.GIFTS[d.base].cost[tier] * d.mul * S.priceRate;
       if (state.gt < state.buffs.dateOffGt) p *= 0.8;   // 商务名片夹 8 折
+      p *= perkMul(state, 'datePriceMul');              // 社交悍匪被动
     }
     return Math.max(1, Math.round(p));
   }
@@ -420,6 +465,8 @@
     const events = [];
     const gain = resolveDate(state, def, kind, variantIdx, false, rng, events);
     if (kind === 'trip') maybeReturnGift(state, def, rng, events);
+    state.stats.totalDates++;
+    checkAchievements(state, events);
     return { ok: true, cost, gain, events };
   }
 
@@ -527,6 +574,7 @@
     let iv = B.LOOT.INTERVAL_S[def.tier] * 1000 / def.coef * S.dropIntervalRate;
     iv *= rand(rng, B.LOOT.JITTER[0], B.LOOT.JITTER[1]);
     if (def.type === 'rep') iv *= B.LOOT.LETTER_INTERVAL_MUL;
+    iv *= perkMul(state, 'dropMul');   // 捡漏之王被动
     return iv;
   }
 
@@ -560,16 +608,62 @@
     return { kind: 'item', itemId, q };
   }
 
-  function invAdd(state, itemId, q, rng) {
-    const cap = B.LOOT.INV_CAP;
-    const rank = { common: 0, fine: 1, rare: 2 };
-    const entry = { it: itemId, q: q || 'common' };
-    if (state.inv.length < cap) { state.inv.push(entry); return true; }
-    // 满：挤掉品质不高于新物的最旧一件
-    for (let i = 0; i < state.inv.length; i++) {
-      if (rank[state.inv[i].q] <= rank[entry.q]) { state.inv.splice(i, 1, entry); return true; }
+  // ── 背包（堆叠模型 {it,q,n}，next-iteration §3.3.1；容量/自动出售 §4）──
+  function invCap(state) {
+    const lv = Math.min(B.INV_CAP_UPGRADES.length, state.capLevel || 0);
+    return lv > 0 ? B.INV_CAP_UPGRADES[lv - 1].cap : B.LOOT.INV_CAP;
+  }
+  function buyInvCap(state) {
+    const lv = state.capLevel || 0;
+    if (lv >= B.INV_CAP_UPGRADES.length) return { ok: false, msg: '背包已达最大扩容' };
+    const up = B.INV_CAP_UPGRADES[lv];
+    if (state.gold < up.cost) return { ok: false, msg: '金币不足（需 ' + fmtMoney(up.cost) + '）' };
+    state.gold -= up.cost;
+    state.capLevel = lv + 1;
+    return { ok: true, msg: '背包扩容至 ' + up.cap + ' 格', cap: up.cap };
+  }
+  function autoSellRank(state) {
+    const g = state.settings.autoSellGrade;
+    return (g === 'common' || g === 'fine') ? B.GRADE_RANK[g] : -1;   // off → -1
+  }
+  function sellUnitPrice(it) {
+    return Math.max(1, Math.round(it.sell * B.LOOT.SELL_RATE));
+  }
+
+  // 入包：同 id 同品质并堆（上限 99），满格按品质挤最旧，稀有永不自动消失
+  function invAdd(state, itemId, q, n, rng) {
+    n = (typeof n === 'number' && n > 0) ? Math.floor(n) : 1;
+    void rng;
+    const rank = B.GRADE_RANK;
+    const grade = q || 'common';
+    let left = n;
+    // 先并入已有堆
+    for (const e of state.inv) {
+      if (e.it === itemId && e.q === grade && (e.n || 1) < 99) {
+        const take = Math.min(99 - (e.n || 1), left);
+        e.n = (e.n || 1) + take;
+        left -= take;
+        if (left <= 0) return true;
+      }
     }
-    return false;
+    while (left > 0) {
+      if (state.inv.length >= invCap(state)) {
+        // 满：挤掉品质不高于新物的最旧一件
+        let squeezed = false;
+        for (let i = 0; i < state.inv.length; i++) {
+          if (rank[state.inv[i].q] <= rank[grade]) {
+            state.inv.splice(i, 1);
+            squeezed = true;
+            break;
+          }
+        }
+        if (!squeezed) return false;
+      }
+      const take = Math.min(99, left);
+      state.inv.push({ it: itemId, q: grade, n: take });
+      left -= take;
+    }
+    return true;
   }
 
   function spawnDrop(state, def, roll) {
@@ -594,8 +688,22 @@
       state.rep += d.qty;
       txt = '+' + d.qty + ' 声望';
     } else if (d.kind === 'item') {
-      if (!invAdd(state, d.itemId, d.q, rng)) { txt = '背包已满，' + globalThis.ITEM_BY_ID[d.itemId].label + ' 散落了'; }
-      else txt = '获得 ' + globalThis.ITEM_BY_ID[d.itemId].label;
+      const itDef = globalThis.ITEM_BY_ID[d.itemId];
+      const thr = autoSellRank(state);
+      if (thr >= B.GRADE_RANK[d.q]) {
+        // 品质阈值过滤在前（§4.1）：折价直接入账，不进背包
+        const amt = sellUnitPrice(itDef);
+        state.gold += amt;
+        state.stats.totalLoot++;
+        txt = '自动售出 ' + itDef.label + ' +' + amt;
+        events.push({ t: 'autosell', txt, itemId: d.itemId, q: d.q, gold: amt });
+      } else if (!invAdd(state, d.itemId, d.q, 1, rng)) {
+        txt = '背包已满，' + itDef.label + ' 散落了';
+      } else {
+        state.stats.totalLoot++;
+        txt = '获得 ' + itDef.label;
+      }
+      checkAchievements(state, events);
     } else if (d.kind === 'intel') {
       revealIntel(state, rng, events);
       txt = '获得一条情报';
@@ -605,14 +713,77 @@
   }
 
   // ── 背包操作 ──
-  function sellItem(state, idx) {
+  function sellItem(state, idx, n) {
     const e = state.inv[idx];
     if (!e) return { ok: false, msg: '没有这件物品' };
+    const have = e.n || 1;
+    const cnt = (typeof n === 'number' && n > 0) ? Math.min(Math.floor(n), have) : have;
     const it = globalThis.ITEM_BY_ID[e.it];
-    const gold = Math.max(1, Math.round(it.sell * B.LOOT.SELL_RATE));
-    state.inv.splice(idx, 1);
+    const gold = sellUnitPrice(it) * cnt;
+    if (cnt >= have) state.inv.splice(idx, 1);
+    else e.n = have - cnt;
     state.gold += gold;
-    return { ok: true, gold };
+    return { ok: true, gold, sold: cnt };
+  }
+
+  // 3 合 1 升品质（next-iteration §1）：picks=[{i,n}]，Σn=NEED，同品质非稀有
+  function synthItems(state, picks, rng) {
+    const need = B.SYNTH.NEED;
+    if (!Array.isArray(picks) || !picks.length) return { ok: false, msg: '请先选择材料' };
+    let total = 0;
+    let grade = null;
+    for (const p of picks) {
+      const e = state.inv[p.i];
+      if (!e) return { ok: false, msg: '材料不存在（背包已变化）' };
+      const take = Math.max(1, Math.min(e.n || 1, Number(p.n) || (e.n || 1)));
+      total += take;
+      if (grade === null) grade = e.q;
+      else if (e.q !== grade) return { ok: false, msg: '只能合成同品质物品' };
+      void take;
+    }
+    if (total !== need) return { ok: false, msg: '需要恰好 ' + need + ' 件材料' };
+    if (grade === 'rare' || B.GRADE_RANK[grade] >= B.GRADE_RANK.rare) return { ok: false, msg: '稀有品质无法再合成' };
+    // 原子性预检：完全消耗的材料条目会腾出格子，至少要剩 1 格给产物
+    let freed = 0;
+    for (const p of picks) {
+      const e = state.inv[p.i];
+      const take = Math.min(e.n || 1, Number(p.n) || (e.n || 1));
+      if (take >= (e.n || 1)) freed++;
+    }
+    if (invCap(state) - state.inv.length + freed < 1) return { ok: false, msg: '背包已满，先腾出一个空位' };
+    // 扣材料：按下标从大到小处理，避免 splice 使后续下标失效
+    const sorted = picks.slice().sort((a, b) => b.i - a.i);
+    for (const p of sorted) {
+      const e = state.inv[p.i];
+      const take = Math.min(e.n || 1, Number(p.n) || (e.n || 1));
+      const left = (e.n || 1) - take;
+      if (left > 0) e.n = left;
+      else state.inv.splice(p.i, 1);
+    }
+    const outQ = B.NEXT_GRADE[grade];
+    const itemId = pick(rng, globalThis.ITEMS).id;   // 全物品表均匀随机（含 send 类）
+    invAdd(state, itemId, outQ, 1);
+    const itDef = globalThis.ITEM_BY_ID[itemId];
+    const txt = '合成出【' + B.GRADE_TXT[outQ] + '】' + itDef.label;
+    return { ok: true, gained: { id: itemId, q: outQ }, txt };
+  }
+
+  // GM/便捷：自动挑一组可合成的最低档材料
+  function findSynthTriple(state) {
+    for (const g of ['common', 'fine']) {
+      let need = B.SYNTH.NEED;
+      const picks = [];
+      for (let i = 0; i < state.inv.length && need > 0; i++) {
+        const e = state.inv[i];
+        if (B.GRADE_RANK[e.q] === B.GRADE_RANK[g]) {
+          const take = Math.min(e.n || 1, need);
+          picks.push({ i, n: take });
+          need -= take;
+        }
+      }
+      if (need === 0) return { grade: g, picks };
+    }
+    return null;
   }
 
   function useItem(state, idx, targetId, rng) {
@@ -622,11 +793,15 @@
     const eff = it.effect;
     const mulQ = e.q === 'fine' ? 1.5 : 1;
     const events = [];
-    const consume = () => state.inv.splice(idx, 1);
+    const consume = () => {
+      const left = (e.n || 1) - 1;
+      if (left > 0) e.n = left;
+      else state.inv.splice(idx, 1);
+    };
 
     switch (eff.kind) {
       case 'stamina': {
-        state.stamina = Math.min(state.settings.staminaMax, state.stamina + eff.amt * mulQ);
+        state.stamina = Math.min(staminaMaxOf(state), state.stamina + eff.amt * mulQ);
         consume();
         events.push({ t: 'item', txt: it.label + '：体力 +' + Math.round(eff.amt * mulQ) });
         break;
@@ -821,7 +996,7 @@
 
     // 体力再生
     if (!offline || S.offlineRegen) {
-      state.stamina = Math.min(S.staminaMax, state.stamina + S.staminaRegenPerMin * gdt / 60000);
+      state.stamina = Math.min(staminaMaxOf(state), state.stamina + S.staminaRegenPerMin * gdt / 60000);
     }
 
     // 工作：产钱 + 耗体力 + 歇业规则（02 方案 A）
@@ -830,6 +1005,7 @@
       if (state.gt >= j.shiftEndGt) { j.shiftEndGt = null; j.resting = false; }
       else if (!j.resting) {
         const jd = B.JOBS[j.id];
+        state.stats.totalWorkMs += gdt;   // 全勤打工人成就计数
         const drain = jd.staminaPerH * gdt / 3600000;
         if (state.stamina - drain <= 0) {
           state.stamina = 0; j.resting = true;    // 体力见底自动歇班，不惩罚
@@ -847,7 +1023,7 @@
             }
           }
         }
-      } else if (state.stamina >= S.staminaMax * B.WORK_REST_RESUME) {
+      } else if (state.stamina >= staminaMaxOf(state) * B.WORK_REST_RESUME) {
         j.resting = false;
       }
     }
@@ -900,15 +1076,40 @@
     // 过期清理
     state.invites = state.invites.filter((x) => x.expGt > state.gt);
 
+    checkAchievements(state, events);
+
     return events;
   }
 
-  // 离线掉落折算：金币/声望直接入账，物品进离线包裹
+  // 离线掉落折算：金币/声望直接入账，物品按阈值过滤（§4.1 同口径）后进离线包裹
   function applyOfflineLoot(state, roll) {
     if (roll.kind === 'gold') { state.gold += roll.qty; state._offPackGold = (state._offPackGold || 0) + roll.qty; }
     else if (roll.kind === 'letter') { state.rep += roll.qty; state._offLetterRep = (state._offLetterRep || 0) + roll.qty; }
-    else if (roll.kind === 'item') { state._offPackage.push({ it: roll.itemId, q: roll.q }); }
+    else if (roll.kind === 'item') {
+      const thr = autoSellRank(state);
+      if (thr >= B.GRADE_RANK[roll.q]) {
+        const amt = sellUnitPrice(globalThis.ITEM_BY_ID[roll.itemId]);
+        state.gold += amt;
+        state._offPackGold = (state._offPackGold || 0) + amt;
+        state._offSoldN = (state._offSoldN || 0) + 1;
+        state.stats.totalLoot++;
+      } else {
+        state._offPackage.push({ it: roll.itemId, q: roll.q, n: 1 });
+      }
+    }
     else if (roll.kind === 'intel') { revealIntel(state, null, state._offIntelEvents); }
+  }
+
+  // 离线包裹领取（UI 调用）：逐条入包并计入拾取成就
+  function absorbOfflinePackage(state, list) {
+    const out = [];
+    (list || []).forEach((p) => {
+      const okc = invAdd(state, p.it, p.q, p.n || 1);
+      if (okc) state.stats.totalLoot += (p.n || 1);
+      out.push({ it: p.it, q: p.q, n: p.n || 1, ok: !!okc });
+    });
+    checkAchievements(state, []);
+    return out;
   }
 
   // ── 决策器意图执行（手动/自动/离线 同管线）──
@@ -937,13 +1138,14 @@
     const report = {
       awayMs: raw, ms: dtReal * state.settings.timeScale, capped: raw > allowedReal + 1,
       wage: 0, packGold: 0, letterRep: 0, milestoneGold: 0, milestoneRep: 0,
-      favors: [], actions: [], package: [], stageNotes: []
+      favors: [], actions: [], package: [], stageNotes: [], soldN: 0
     };
     if (dtReal < 5000) { state.lastSeen = nowReal; return report; }
 
     state._offPackage = [];
     state._offPackGold = 0;
     state._offLetterRep = 0;
+    state._offSoldN = 0;
     state._offIntelEvents = [];
     state._offMul = state.settings.offlineFavorRate;
 
@@ -980,7 +1182,9 @@
     report.package = state._offPackage;
     report.packGold = state._offPackGold;
     report.letterRep = state._offLetterRep;
+    report.soldN = state._offSoldN || 0;
     delete state._offPackage; delete state._offPackGold; delete state._offLetterRep; delete state._offIntelEvents;
+    delete state._offSoldN;
 
     state.lastSeen = nowReal;
     return report;
@@ -1031,7 +1235,7 @@
     n = Number(n) || 0;
     if (kind === 'gold') state.gold += n;
     else if (kind === 'rep') state.rep += n;
-    else if (kind === 'stamina') state.stamina = Math.min(state.settings.staminaMax, state.stamina + n);
+    else if (kind === 'stamina') state.stamina = Math.min(staminaMaxOf(state), state.stamina + n);
     else if (kind === 'item') {
       const it = globalThis.ITEMS[Math.floor(Math.random() * globalThis.ITEMS.length)];
       invAdd(state, it.id, 'rare');
@@ -1092,9 +1296,12 @@
     overLine, budgetLeftGlobal, budgetLeftNpc,
     priceOf, favorOf, matchTags, hotspotHit, bestVariantIdx,
     spendGift, spendDate, spendErrand, resolveDate, rollDateEvent, revealIntel, maybeReturnGift,
-    rollLoot, lootIntervalMs, qualityRollWith, invAdd, spawnDrop, collectDrop, sellItem, useItem, sendItem,
+    rollLoot, lootIntervalMs, qualityRollWith, invAdd, invCap, buyInvCap, autoSellRank,
+    spawnDrop, collectDrop, sellItem, sellUnitPrice, useItem, sendItem, synthItems, findSynthTriple,
+    absorbOfflinePackage,
+    checkAchievements, staminaMaxOf, assetCount, perkMul,
     refreshHotspots, inviteRoll, acceptInvite, newDay, logPush,
-    step, execAction, settleOffline,
+    step, execAction, settleOffline, applyOfflineLoot,
     applyPreset, setSetting, gmGrant, gmUnlockTier, gmAllFavor,
     upgradeAttr, expandSlot, canEnterTier, enterTier, attrCost,
     fmtMoney, fmtRate
