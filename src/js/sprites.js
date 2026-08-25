@@ -158,5 +158,41 @@
   }
 
   globalThis.Sprites = { getSprite, draw, drawHead, shadow, TYPE_ACCENT };
+
+  // ── 主角小人（02 §3.3：在岗穿工作服，下班便装走向攻略目标）──
+  const ME_CACHE = new Map();
+  function meVariant(onDuty) {
+    const key = onDuty ? 'duty' : 'off';
+    if (ME_CACHE.has(key)) return ME_CACHE.get(key);
+    const def = {
+      id: '__me__' + key,
+      type: 'money',
+      look: {
+        gender: 'm', hair: 'short', hairColor: '#2a2630',
+        outfit: 'suit',
+        outfitColor: onDuty ? '#8a5a34' : '#3d4f8c',   // 工作服围裙棕 / 便装西装蓝
+        accessory: onDuty ? 'scarf' : 'none'            // 围裙带借用 scarf 行
+      }
+    };
+    const s = getSprite(def);
+    ME_CACHE.set(key, s);
+    return s;
+  }
+  function drawMe(ctx, x, y, px, frame, onDuty) {
+    const { rows, colors } = meVariant(onDuty);
+    for (let r = 0; r < 16; r++) {
+      if (frame === 1 && r === 0) continue;
+      const row = rows[r];
+      const py = y + (r + (frame === 1 ? 1 : 0)) * px;
+      for (let c = 0; c < 12; c++) {
+        const ch = row[c];
+        if (ch === '.') continue;
+        ctx.fillStyle = colors[ch];
+        ctx.fillRect(x + c * px, py, px, px);
+      }
+    }
+  }
+
+  globalThis.Sprites.drawMe = drawMe;
   if (typeof module !== 'undefined') module.exports = globalThis.Sprites;
 })();

@@ -1,8 +1,10 @@
-// 引擎自测（纯 node，无外部依赖）：数值依据 docs/drafts/alpha/02-numbers.md
+// 引擎自测 v2（纯 node，零依赖）：数值依据 docs/drafts/alpha2/01~08 + docs/dev/v2-api.md
 'use strict';
 
 require('../src/js/data/balance.js');
 require('../src/js/data/npcs.js');
+require('../src/js/data/items.js');
+require('../src/js/data/texts.js');
 const Engine = require('../src/js/engine.js');
 
 const B = globalThis.BALANCE;
@@ -28,301 +30,389 @@ function near(actual, want, tol, name) {
 
 const NOW = 1750000000000;
 function fresh() { return Engine.newState(NOW); }
+// 确定性 rng 序列
+function seqRng(values) { let i = 0; return () => values[i++ % values.length]; }
 
-// ── 1. newState 初始值 ──
+// ── 1. newState 初始值（v2：启动资金/自动开攻/入职）──
 (function () {
   const st = fresh();
   eq(st.tier, 1, 'newState: tier=1');
   eq(st.slotCount, 3, 'newState: slotCount=3');
-  eq(st.stamina, 100, 'newState: stamina=100');
-  eq(st.gold, 0, 'newState: gold=0');
+  eq(st.gold, 10000, 'newState: 启动资金 10000（02 §2）');
+  eq(st.slots[0], 't1_gu', 'newState: 第一目标顾言自动进槽（00 §4 红线）');
+  eq(st.job.id, 'restaurant', 'newState: 已入职餐厅');
+  eq(st.settings.staminaRegenPerMin, 20, 'newState: 体力恢复 20/分（01 §1）');
 })();
 
 // ── 2. statusOf 状态机 ──
 (function () {
   const st = fresh();
+  st.slots = [];
   eq(Engine.statusOf(st, DEF.t1_lin), 'available', 'statusOf: T1 available');
   eq(Engine.statusOf(st, DEF.t2_lu), 'locked', 'statusOf: T2 locked');
   ok(Engine.addToSlot(st, 't1_lin').ok, 'addToSlot 成功');
   eq(Engine.statusOf(st, DEF.t1_lin), 'courting', 'statusOf: 入槽 courting');
   ok(Engine.removeFromSlot(st, 't1_lin').ok, 'removeFromSlot 成功');
-  eq(Engine.statusOf(st, DEF.t1_lin), 'available', 'statusOf: 出槽回 available');
 })();
 
-// ── 3. 自动好感：60 分钟 ≈ 30 点 ──
+// ── 3. 自动好感不变：60 分钟 ≈ 30 点；体力 20 点/分 ──
 (function () {
   const st = fresh();
   near(Engine.autoFavorPerMin(st, DEF.t1_lin), 0.5, 1e-9, 'T1 无魅力自动好感 0.5/分');
-  ok(Engine.addToSlot(st, 't1_lin').ok, 'slot lin');
-  Engine.tick(st, NOW + 60 * 60000);
-  near(st.npcs.t1_lin.favor, 30, 0.1, 'tick 60 分钟 favor≈30');
-  eq(st.lastSeen, NOW + 60 * 60000, 'lastSeen 前移');
+  st.stamina = 40;
+  Engine.step(st, 3 * 60000);
+  eq(st.stamina, 100, '3 分钟回复 60 点（20/分），40→100 封顶');
+  st.slots = ['t1_lin'];
+  const f0 = Engine.npc(st, 't1_lin').favor;
+  Engine.step(st, 60 * 60000);
+  near(Engine.npc(st, 't1_lin').favor - f0, 30, 0.1, 'step 60 分钟 favor≈30');
+  eq(Math.floor(st.gt / 60000), 63, '游戏时钟 gt 累计');
 })();
 
-// ── 4. 魅力加成与 T2 矜持 ──
+// ── 4. 渠道动作（02 §4.1 / 04 §2.4 免费池）──
 (function () {
   const st = fresh();
-  st.attrs.charm = 10;
-  near(Engine.autoFavorPerMin(st, DEF.t1_lin), 0.5 * 1.8, 1e-9, 'charm=10 → ×1.8');
-  near(Engine.autoFavorPerMin(st, DEF.t2_bai), 0.5 * 1.8 / 1.2, 1e-9, 'T2 矜持 1.2 → 再÷1.2');
+  // 微信：+2 固定，CD 30 游戏分
+  let r = Engine.wechat(st, 't1_gu');
+  ok(r.ok, 'wechat 首次成功');
+  near(r.gain, 2, 1e-9, 'wechat +2 固定好感');
+  r = Engine.wechat(st, 't1_gu');
+  ok(!r.ok && r.msg === '冷却中', 'wechat 冷却拦截');
+  // 朋友圈：0 体力 CD 2 时
+  r = Engine.moments(st, 't1_gu');
+  ok(r.ok, 'moments 成功');
+  r = Engine.moments(st, 't1_gu');
+  ok(!r.ok, 'moments 冷却拦截');
+  // 职场互动需在岗且 T1
+  r = Engine.workplace(st, 't1_gu', NOW);
+  ok(!r.ok && r.msg.indexOf('在岗') >= 0, 'workplace 非在岗拒绝');
+  Engine.startShift(st, 8);
+  r = Engine.workplace(st, 't1_gu', NOW);
+  ok(r.ok, 'workplace 在岗成功');
+  r = Engine.workplace(st, 't1_he', NOW);
+  ok(!r.ok, 'T1 未入槽拒绝（需 courting）');
+  // 线下互动在岗拒绝
+  r = Engine.interact(st, 't1_gu', NOW);
+  ok(!r.ok && r.msg.indexOf('动嘴') >= 0, 'interact 在岗拒绝（渠道约束）');
+  Engine.stopShift(st);
+  r = Engine.interact(st, 't1_gu', NOW);
+  ok(r.ok, '下班后 interact 成功');
+  near(r.gain, 2.5, 1e-9, 'T1 基础互动收益 2.5');
 })();
 
-// ── 5. interact ──
+// ── 5. 消费项目价目（05 §2 公式口径）──
 (function () {
   const st = fresh();
-  ok(Engine.addToSlot(st, 't1_lin').ok, 'slot lin');
-  const r = Engine.interact(st, 't1_lin', NOW + 1000);
-  ok(r.ok, 'interact 成功');
-  eq(st.stamina, 90, 'interact 耗 10 体力');
-  near(r.gain, 0.5 * 5 * 1.0, 1e-9, 'T1 基础互动收益 2.5');
-  st.stamina = 5;
-  const r2 = Engine.interact(st, 't1_lin', NOW + 2000);
-  ok(!r2.ok, '体力不足 ok:false');
-  eq(st.stamina, 5, '体力不足不扣');
+  eq(Engine.priceOf(st, 'gift', 'small', 1), 80, '小礼 T1=80');
+  eq(Engine.priceOf(st, 'date', 'light', 1), 120, '轻约=小礼×1.5=120');
+  eq(Engine.priceOf(st, 'date', 'meal', 1), 375, '正餐=中礼×1.5=375');
+  eq(Engine.priceOf(st, 'date', 'trip', 1), 2000, '远行=大礼×2.5=2000');
+  eq(Engine.priceOf(st, 'errand', null, 1), 4800, '办事=大礼×6=4800');
+  st.settings.priceRate = 2;
+  eq(Engine.priceOf(st, 'gift', 'small', 1), 160, 'priceRate 全局物价 ×2');
 })();
 
-// ── 6. 里程碑（金钱型 +300 / 声望型 +8），claimed 防重复 ──
+// ── 6. 偏好匹配与热点加成（05 §3 / 08 §5）──
+(function () {
+  const st = fresh();  // 顾言 tags=[科技,市井]
+  let m = Engine.matchTags(st, DEF.t1_gu, ['市井', '美食']);
+  ok(m.hit && m.coef === 1.2, '街角咖啡命中市井 ×1.2');
+  m = Engine.matchTags(st, DEF.t1_gu, ['文艺', '收藏']);
+  ok(!m.hit && m.coef === 0.8, '看展错配 ×0.8');
+  near(Engine.favorOf(st, DEF.t1_gu, 'date', 'light', 0), 7.2, 1e-9, '命中轻约 6×1.2');
+  near(Engine.favorOf(st, DEF.t1_gu, 'date', 'light', 1), 4.8, 1e-9, '错配轻约 6×0.8');
+  // 情报：第三偏好扩展窗口 + 雷区强制错配
+  st.intel.t1_gu = { third: true };
+  m = Engine.matchTags(st, DEF.t1_gu, ['商务', '酒局']);
+  ok(m.hit && m.coef === 1.2, '第三偏好「商务」命中商务宴请');
+  st.intel.t1_gu.mine = true;
+  m = Engine.matchTags(st, DEF.t1_gu, ['文艺', '时尚']);
+  ok(m.coef === 0.8, '雷区外变体维持错配');
+  // 热点命中 +20%
+  st.hotspot = { day: Engine.dayIndex(st), list: [{ name: '画廊新展', tags: ['文艺', '收藏'] }] };
+  st.intel.t1_gu = {};
+  const hotBase = B.SPEND.date.light.favor * 0.8 * B.DATE.HOTSPOT_FAVOR;
+  near(Engine.favorOf(st, DEF.t1_gu, 'date', 'light', 1), hotBase, 1e-9, '热点命中看展再 ×1.2');
+})();
+
+// ── 7. 送礼/约会结算与解锁门槛 ──
+(function () {
+  const st = fresh();
+  st.gold = 50000;
+  let r = Engine.spendGift(st, 't1_gu', 'mid');
+  ok(r.ok && r.cost === 250, '中礼扣费 250');
+  near(st.npcs.t1_gu.favor, 10, 1e-9, '中礼 +10 好感');
+  eq(st.spent.npc.t1_gu, 250, '单人台账记录');
+  r = Engine.spendDate(st, 't1_gu', 'meal', 0);
+  ok(!r.ok && r.msg.indexOf('25') >= 0, '正餐需好感≥25');
+  Engine.npc(st, 't1_gu').favor = 24;
+  Engine.grantFavor(st, DEF.t1_gu, 1, []);
+  r = Engine.spendDate(st, 't1_gu', 'trip', 0);
+  ok(!r.ok, '远行需好感≥50');
+  r = Engine.spendErrand(st, 't1_gu');
+  ok(!r.ok, '办事需好感≥75');
+  Engine.npc(st, 't1_gu').favor = 76;
+  r = Engine.spendErrand(st, 't1_gu');
+  ok(r.ok, '办事成功');
+  ok(st.errandUsed.t1_gu, 'errandUsed 标记');
+  r = Engine.spendErrand(st, 't1_gu');
+  ok(!r.ok, '每人限一次');
+  // 大礼品味门槛沿用
+  st.attrs.taste = 0;
+  if (!Engine.addToSlot(st, 't3_fu').ok) { st.tier = 3; ok(Engine.addToSlot(st, 't3_fu').ok, '构造 T3 入槽'); }
+  r = Engine.spendGift(st, 't3_fu', 'large');
+  ok(!r.ok && r.msg.indexOf('品味') >= 0, '大礼品味不足拒绝');
+})();
+
+// ── 8. 预算硬护栏（05 §4 手动/自动共用）──
+(function () {
+  const st = fresh();
+  st.gold = 1e9;
+  st.spent.global = st.settings.dailyBudget;   // 全局达线
+  const r = Engine.spendGift(st, 't1_gu', 'small');
+  ok(!r.ok && r.msg === '今日预算已用完', '超线付费拦截');
+  eq(st.spent.global, st.settings.dailyBudget, '失败不记账');
+  st.spent.global = 0;
+  st.spent.npc.t1_gu = st.settings.perNpcBudget;
+  const r2 = Engine.spendGift(st, 't1_gu', 'small');
+  ok(!r2.ok, '单人达线同样拦截');
+  const r3 = Engine.spendGift(st, 't1_zhou') || undefined;
+  st.slots.push('t1_zhou');
+  const r4 = Engine.spendGift(st, 't1_zhou', 'small');
+  ok(r4.ok, '其他 NPC 不受单人线影响');
+  eq(Engine.budgetLeftGlobal(st), Infinity * 0 || (st.settings.dailyBudget - st.spent.global),
+    'budgetLeftGlobal 扣减正确');
+})();
+
+// ── 9. 工作排班（02 方案 A）：工资/耗体力/歇业/班次结束 ──
+(function () {
+  const st = fresh();
+  Engine.startShift(st, 2);
+  ok(Engine.onDuty(st), '上班 onDuty');
+  const g0 = st.gold;
+  const s0 = st.stamina;
+  st.slots = ['t1_lin'];             // 换声望型在槽：里程碑发声望不污染工资
+  Engine.step(st, 3600000);          // 1 游戏小时
+  near(st.gold - g0, 30, 0.51, '餐厅时薪 30 元/时（无小费口径）');
+  near(s0 - st.stamina, 12, 0.01, '耗体力 12/时');
+  Engine.step(st, 3600000);          // 第 2 小时 → 班次结束
+  ok(!Engine.onDuty(st), '2 小时班次自动结束');
+  // 歇业规则：体力见底停工不惩罚
+  const savedRegen = st.settings.staminaRegenPerMin;
+  st.settings.staminaRegenPerMin = 0;      // 关闭回复才能压到底
+  st.stamina = 0.1;
+  Engine.startShift(st, 4);
+  st.job.resting = false;
+  Engine.step(st, 60000);
+  eq(st.job.resting, true, '体力见底触发歇业');
+  st.settings.staminaRegenPerMin = savedRegen;
+  st.stamina = st.settings.staminaMax * BALANCE.WORK_REST_RESUME + 5;
+  Engine.step(st, 60000);
+  ok(!st.job.resting, '恢复到 30% 自动复岗');
+  Engine.stopShift(st);
+  // 夜班解锁门槛
+  const r = Engine.hireJob(st, 'night');
+  ok(!r.ok, '便利店夜班需资产≥3');
+})();
+
+// ── 10. 掉落期望对齐 v1 秒产（07 §1.2）＋ 内容分流 ──
+(function () {
+  const st = fresh();
+  const def = DEF.t1_gu;                       // money ×1.2 → 期望 4320 金/时
+  const N = 4000;
+  let sumGold = 0, goldCnt = 0, itemCnt = 0, qCnt = { common: 0, fine: 0, rare: 0 };
+  const rng = Math.random;
+  for (let i = 0; i < N; i++) {
+    const roll = Engine.rollLoot(st, def, rng);
+    if (roll.kind === 'gold') { sumGold += roll.qty; goldCnt++; }
+    else if (roll.kind === 'item') { itemCnt++; qCnt[roll.q]++; }
+  }
+  near(sumGold / N, 1.2 * 3600 * 0.70, 1.2 * 3600 * 0.08, '金币包期望（含分支占比）≈3024/时（±8%）');
+  const itemShare = itemCnt / N;
+  near(itemShare, 0.30, 0.06, '物品分支占比 ≈30%（07 内容表 money 型）');
+  ok(qCnt.common > qCnt.fine && qCnt.fine >= qCnt.rare, '品质分布 普通>精致≥稀有');
+  // 声望型手札
+  const repRoll = Engine.rollLoot(st, DEF.t1_lin, () => 0.001);
+  ok(repRoll.kind === 'letter' && repRoll.qty === B.LOOT.LETTER_REP[1], '声望型掉手札 T1=1');
+  near(Engine.lootIntervalMs(st, DEF.t1_gu, () => 0.5) / 1000, 100, 0.01,
+    '间隔基准 120s÷系数1.2（jitter=1.0 口径）');
+})();
+
+// ── 11. 掉落拾取/背包容量与挤占/出售 ──
+(function () {
+  const st = fresh();
+  st.drops.push({ uid: 1, id: 't1_gu', kind: 'gold', qty: 500, bornReal: NOW });
+  let r = Engine.collectDrop(st, 1, true);
+  ok(r.ok && st.gold === 10000 + 1000, '暴击 ×2 到账');
+  st.inv = [];
+  for (let i = 0; i < 50; i++) ok(Engine.invAdd(st, 'souvenir', 'common'), '第' + (i + 1) + '件入包');
+  ok(Engine.invAdd(st, 'limited_collectible', 'rare'), '满包稀有仍可入（挤普通）');
+  eq(st.inv.length, 50, '容量封顶 50');
+  ok(st.inv.some((x) => x.it === 'limited_collectible'), '新物在包');
+  st.inv = []; for (let i = 0; i < 50; i++) st.inv.push({ it: 'souvenir', q: 'rare' });
+  eq(st.inv.length, 50, '稀有包已满');
+  ok(Engine.invAdd(st, 'souvenir', 'common') === false, '全稀有包拒收普通');
+  st.inv = [{ it: 'souvenir', q: 'common' }];
+  st.inv = [{ it: 'souvenir', q: 'common' }];
+  const g0 = st.gold;
+  r = Engine.sellItem(st, 0);
+  ok(r.ok && r.gold === Math.round(25 * 0.3) && st.gold === g0 + r.gold, '出售折价 30%');
+})();
+
+// ── 12. 物品效果 ──
+(function () {
+  const st = fresh();
+  st.stamina = 10;
+  st.inv.push({ it: 'energy_coffee', q: 'fine' });
+  let r = Engine.useItem(st, 0, null);
+  ok(r.ok && st.stamina === 55, '精致体力咖啡 +45（30×1.5）→55');
+  st.inv.push({ it: 'souvenir', q: 'common' });
+  r = Engine.useItem(st, 0, 't1_gu');
+  ok(r.ok && st.npcs.t1_gu.favor === 2, '纪念品送出 +2 好感');
+  st.inv.push({ it: 'gift_box', q: 'fine' });
+  r = Engine.useItem(st, 0, 't1_gu');
+  ok(r.ok, '礼物盒免费送出');
+  near(st.npcs.t1_gu.favor, 17, 1e-9, '精致礼物盒等效中礼 ×1.5=15（2+15）');
+  st.inv.push({ it: 'card_holder', q: 'common' });
+  r = Engine.useItem(st, 0, null);
+  ok(st.gt < st.buffs.dateOffGt, '名片夹折扣 buff 生效');
+  eq(Engine.priceOf(st, 'date', 'light', 1), Math.round(120 * 0.8), '约会价 8 折');
+  st.inv.push({ it: 'intel_brief', q: 'common' });
+  const rep0 = st.rep;
+  Engine.useItem(st, 0, null);
+  ok(st.rep > rep0, '内部简报加声望');
+  // 引荐名片解锁上一层锁定 NPC
+  st.inv.push({ it: 'referral_card', q: 'rare' });
+  r = Engine.useItem(st, 0, null);
+  ok(r.ok && st.npcs.t2_lu.referred === true, '引荐名片解锁 T2 锁定 NPC');
+})();
+
+// ── 13. 里程碑/满级/引荐（v1 口径回归）──
 (function () {
   const st = fresh();
   Engine.npc(st, 't1_gu').favor = 24;
   const ev = [];
   Engine.grantFavor(st, DEF.t1_gu, 2, ev);
-  near(st.npcs.t1_gu.favor, 26, 1e-9, '金钱型 favor 24→26');
-  const ms = ev.filter((e) => e.t === 'milestone');
-  eq(ms.length, 1, '触发 1 个里程碑');
-  eq(ms[0].kind, 'gold', '金钱型里程碑 kind=gold');
-  eq(ms[0].amount, 300, 'T1 金币里程碑 +300');
-  eq(st.gold, 300, '金币到账');
-  ok(st.npcs.t1_gu.claimed.indexOf(25) >= 0, 'claimed 记录 25');
-
-  Engine.npc(st, 't1_gu').favor = 24;
+  eq(ev.filter((e) => e.t === 'milestone').length, 1, '跨 25 触发里程碑');
+  eq(st.gold, 10000 + 300, '金钱型里程碑 +300（含启动金基线）');
+  const st2 = fresh();
+  Engine.npc(st2, 't1_shen').favor = 99;
   const ev2 = [];
-  Engine.grantFavor(st, DEF.t1_gu, 2, ev2);
-  eq(ev2.filter((e) => e.t === 'milestone').length, 0, '重复跨 25 不再触发');
-  eq(st.gold, 300, '重复不重复发钱');
-
-  Engine.npc(st, 't1_lin').favor = 24;
+  Engine.grantFavor(st2, DEF.t1_shen, 1, ev2);
+  eq(st2.npcs.t2_lu.referred, true, '穆成满级引荐陆之衍（03 名册）');
+  const st3 = fresh();
   const ev3 = [];
-  Engine.grantFavor(st, DEF.t1_lin, 2, ev3);
-  const ms3 = ev3.filter((e) => e.t === 'milestone');
-  eq(ms3.length, 1, '声望型触发 1 个里程碑');
-  eq(ms3[0].kind, 'rep', '声望型里程碑 kind=rep');
-  eq(ms3[0].amount, 8, 'T1 声望型里程碑 +8');
-  eq(st.rep, 8, '声望到账');
+  Engine.npc(st3, 't1_gu').favor = 20;
+  Engine.grantFavor(st3, DEF.t1_gu, 10, ev3);
+  ok(ev3.some((e) => e.t === 'stage' && e.from === 'ice' && e.to === 'warm'), '阶段切换事件 ice→warm');
 })();
 
-// ── 7. 满级转化：asset=true、移出 slots、满级声望 ──
+// ── 14. 热点日历与邀约（08 §4~§5）──
 (function () {
   const st = fresh();
-  ok(Engine.addToSlot(st, 't1_lin').ok, 'slot lin');
-  Engine.npc(st, 't1_lin').favor = 99;
-  const ev = [];
-  Engine.grantFavor(st, DEF.t1_lin, 1, ev);
-  eq(st.npcs.t1_lin.favor, 100, '满级 favor=100');
-  eq(st.npcs.t1_lin.asset, true, 'asset=true');
-  eq(st.slots.indexOf('t1_lin'), -1, '移出 slots');
-  eq(st.rep, B.FULL_REP[1] * 2, 'rep 型满级声望 5×2=10');
-  ok(ev.some((e) => e.t === 'full' && e.id === 't1_lin' && e.rep === 10), 'full 事件');
-
+  const list = Engine.refreshHotspots(st, () => 0.1);
+  ok(list.length >= 1 && list.length <= 2, '每日热点 1~2 个');
+  ok(list.every((h) => h.name && h.tags.length >= 2), '热点带 tag');
+  // 邀约判定：rng=0 必中
+  Engine.npc(st, 't1_gu').favor = 50;
+  const ev = Engine.inviteRoll(st, () => 0.001);
+  ok(st.invites.length === 1 && ev.some((e) => e.t === 'invite'), '好感≥50 判定出邀约');
+  // 接受=免费正餐档
+  const f0 = st.npcs.t1_gu.favor;
+  const r = Engine.acceptInvite(st, 't1_gu', Math.random);
+  ok(r.ok && st.invites.length === 0, '接受邀约消耗邀约');
+  ok(st.npcs.t1_gu.favor > f0, '免费约会推进好感');
+  // 低好感不出邀约
   const st2 = fresh();
-  Engine.npc(st2, 't1_gu').favor = 99;
-  Engine.grantFavor(st2, DEF.t1_gu, 1, []);
-  eq(st2.rep, B.FULL_REP[1], '非 rep 型满级声望 5');
-  eq(Engine.statusOf(st2, DEF.t1_gu), 'asset', '状态 asset');
+  Engine.npc(st2, 't1_gu').favor = 39;
+  Engine.inviteRoll(st2, () => 0.001);
+  eq(st2.invites.length, 0, '好感<40 无邀约');
 })();
 
-// ── 8. 引荐：t1_shen 满级 → t2_lu available ──
+// ── 15. 日切重置预算 ──
 (function () {
   const st = fresh();
-  Engine.npc(st, 't1_shen').favor = 99;
-  Engine.grantFavor(st, DEF.t1_shen, 1, []);
-  eq(st.npcs.t2_lu.referred, true, 't2_lu 被标记引荐');
-  eq(Engine.statusOf(st, DEF.t2_lu), 'available', 't2_lu 变为 available');
-  eq(st.tier, 1, '圈层仍为 1');
+  st.spent.global = 999;
+  Engine.step(st, B.DAY_MS + 1000);   // 跨一天
+  eq(st.spent.day, 1, 'dayIndex 前移');
+  eq(st.spent.global, 0, '日切清零台账');
+  ok(st.hotspot.day === 1, '热点随日切刷新');
 })();
 
-// ── 9. 资产产出 ──
+// ── 16. 情报揭示（08 §6）──
 (function () {
   const st = fresh();
-  Engine.npc(st, 't1_gu').asset = true;
-  near(Engine.incomePerSec(st), 1.0 * 1 * 1.2, 1e-9, 't1_gu 资产 1.2 金/秒');
+  ok(Engine.revealIntel(st, () => 0.01, []), '揭示成功');
+  const keys = Object.keys(st.intel);
+  eq(keys.length, 1, '一条情报一个 NPC');
+  const info = st.intel[keys[0]];
+  ok(info.third || info.line || info.mine, '情报字段写入');
+})();
+
+// ── 17. 离线结算 v2（04 §5 同架构模拟）──
+(function () {
+  // 8 小时：工资 + 决策器动作聚合
+  const st = fresh();
+  Engine.startShift(st, 8);
+  st.lastSeen = NOW - 8 * 3600000;
+  const rep = Engine.settleOffline(st, NOW, Math.random, () => ({ act: 'wechat', id: 't1_gu' }));
+  ok(!rep.capped, '8h 未触顶');
+  ok(rep.wage > 150 && rep.wage < 420, '离班工资 ≈240（现实晚班时段 ×1.5 波动）');
+  ok(rep.actions.length > 0, '决策动作聚合非空');
+  ok(rep.package instanceof Array, '离线包裹字段存在');
+  ok(rep.ms > 0, '结算游戏时长>0');
+
+  // 30 小时触顶（12h 上限）
   const st2 = fresh();
-  Engine.npc(st2, 't1_lin').asset = true;
-  near(Engine.repPerMin(st2), 0.10, 1e-9, 't1_lin 资产 repPerMin+=0.10');
-})();
-
-// ── 10. tick 挂机 1 小时 ──
-// 槽内放 rep 型（里程碑发声望），保证金币增量只来自资产
-(function () {
-  const st = fresh();
-  Engine.npc(st, 't1_gu').asset = true;
-  ok(Engine.addToSlot(st, 't1_lin').ok, 'slot lin');
-  const g0 = st.gold;
-  const r0 = st.rep;
-  const f0 = st.npcs.t1_lin.favor;
-  Engine.tick(st, NOW + 3600 * 1000);
-  near(st.gold - g0, 1.2 * 3600, 0.5, '挂机 1h 金币≈4320');
-  near(st.npcs.t1_lin.favor - f0, 0.5 * 60, 0.1, '挂机 1h 好感≈30');
-  eq(st.rep - r0, 8, '挂机跨 25 触发声望型里程碑 +8');
-})();
-
-// ── 11. 送礼 ──
-(function () {
-  const st = fresh();
-  ok(Engine.addToSlot(st, 't1_gu').ok, 'slot gu');
-  st.gold = 10000;
-  let r = Engine.gift(st, 't1_gu', 'small');
-  ok(r.ok, '小礼成功');
-  eq(r.cost, 80, '小礼花费 80');
-  near(r.gain, 4, 1e-9, '小礼 +4 好感');
-  r = Engine.gift(st, 't1_gu', 'mid');
-  ok(r.ok, '中礼成功');
-  eq(r.cost, 250, '中礼花费 250');
-  near(r.gain, 10, 1e-9, '中礼 +10 好感');
-  eq(st.gold, 10000 - 80 - 250, '礼物累计扣费');
-
-  st.tier = 3; // 构造：解锁 T3
-  st.attrs.taste = 0;
-  ok(Engine.addToSlot(st, 't3_fu').ok, 'slot fu（构造 tier=3）');
-  st.gold = 1000000;
-  r = Engine.gift(st, 't3_fu', 'large');
-  ok(!r.ok, 'T3 大礼品味不足 ok:false');
-
-  st.gold = 79;
-  r = Engine.gift(st, 't1_gu', 'small');
-  ok(!r.ok, '金币不足 ok:false');
-  eq(st.gold, 79, '失败不扣费');
-})();
-
-// ── 12. 属性升级成本 ──
-(function () {
-  eq(Engine.attrCost(0), 150, 'attrCost(0)=150');
-  eq(Engine.attrCost(1), 255, 'attrCost(1)=round(150×1.7)=255');
-  eq(Engine.attrCost(3), 737, 'attrCost(3)=round(150×1.7³)=737');
-  const st = fresh();
-  st.gold = 100;
-  ok(!Engine.upgradeAttr(st, 'charm').ok, '金币不足升级失败');
-  st.gold = 150;
-  const r = Engine.upgradeAttr(st, 'charm');
-  ok(r.ok, '金币足够升级成功');
-  eq(st.attrs.charm, 1, 'charm 升至 1');
-  eq(st.gold, 0, '扣费 150');
-})();
-
-// ── 13. 槽位扩容 ──
-(function () {
-  const st = fresh();
-  st.gold = 50000;
-  const r = Engine.expandSlot(st);
-  ok(r.ok, '扩容成功');
-  eq(st.slotCount, 4, 'slotCount 3→4');
-  eq(r.cost, 50000, '第 4 槽花 50000');
-  eq(B.SLOT_COSTS[5], 500000, 'SLOT_COSTS[5]=500000');
-  st.slotCount = 7;
-  st.gold = 1e9;
-  ok(!Engine.expandSlot(st).ok, '7 槽时扩容失败');
-})();
-
-// ── 14. 圈层进入 ──
-(function () {
-  const st = fresh();
-  st.rep = 99;
-  st.gold = 100000;
-  ok(!Engine.enterTier(st, 2).ok, 'rep<100 进 T2 失败');
-  eq(st.tier, 1, '圈层未变');
-  st.rep = 100;
-  const r = Engine.enterTier(st, 2);
-  ok(r.ok, 'rep=100 且 gold 足够 → 成功');
-  eq(st.tier, 2, 'tier=2');
-  eq(st.gold, 90000, '扣入场费 10000');
-  ok(!Engine.enterTier(st, 4).ok, '跳级进 T4 失败');
-  st.rep = 600;
-  st.gold = 100000;
-  st.attrs.taste = 0;
-  ok(!Engine.enterTier(st, 3).ok, 'T3 品味不足失败');
-  st.attrs.taste = 10;
-  ok(Engine.enterTier(st, 3).ok, '品味 10 达标进 T3');
-  eq(st.tier, 3, 'tier=3');
-})();
-
-// ── 15. 辅助型资产加成与封顶 ──
-(function () {
-  const st = fresh();
-  ['t1_he', 't1_jiang', 't2_qin'].forEach((id) => { Engine.npc(st, id).asset = true; });
-  near(Engine.auxBonus(st), 0.15, 1e-9, '3 个 aux 资产 auxBonus=0.15');
-  near(Engine.autoFavorPerMin(st, DEF.t1_lin), 0.5 * 1.15, 1e-9, '自动好感 ×1.15');
-
-  // 全游戏仅 8 名 aux NPC，临时扩充 NPC_BY_ID 构造 11 个 aux 资产以验证封顶
-  const saved = globalThis.NPC_BY_ID;
-  globalThis.NPC_BY_ID = Object.assign({}, saved);
-  ['x_aux_a', 'x_aux_b', 'x_aux_c'].forEach((id) => {
-    globalThis.NPC_BY_ID[id] = { id: id, name: id, tier: 1, type: 'aux', coef: 1 };
-  });
-  try {
-    ['t1_he', 't1_jiang', 't2_qin', 't2_xu', 't3_li', 't3_jiangsheng', 't4_guan', 't5_nan',
-      'x_aux_a', 'x_aux_b', 'x_aux_c'].forEach((id) => { Engine.npc(st, id).asset = true; });
-    near(Engine.auxBonus(st), 0.5, 1e-9, '11 个 aux 封顶 0.5');
-    near(Engine.autoFavorPerMin(st, DEF.t1_lin), 0.5 * 1.5, 1e-9, '封顶后速率 ×1.5');
-  } finally {
-    globalThis.NPC_BY_ID = saved;
-  }
-})();
-
-// ── 16. 离线结算 ──
-// 槽内放 rep 型（里程碑发声望），保证金币口径纯净；好感速率用 2h 窗口验证（8h 会撞 FAVOR_MAX=100 封顶）
-(function () {
-  const st = fresh(); // 2 小时：验证 ×50% 效率
-  Engine.npc(st, 't1_gu').asset = true;
-  ok(Engine.addToSlot(st, 't1_lin').ok, 'slot lin (2h)');
-  st.lastSeen = NOW - 2 * 3600000;
-  const rep = Engine.settleOffline(st, NOW);
-  ok(!rep.capped, '2 小时未触顶');
-  eq(rep.favors.length, 1, '结算 1 名槽内 NPC');
-  eq(rep.favors[0].id, 't1_lin', '结算对象 t1_lin');
-  near(rep.favors[0].gained, 0.5 * 120 * 0.5, 0.1, '离线好感=在线速率×50%');
-
-  const st1 = fresh(); // 8 小时
-  Engine.npc(st1, 't1_gu').asset = true;
-  ok(Engine.addToSlot(st1, 't1_lin').ok, 'slot lin (8h)');
-  st1.lastSeen = NOW - 8 * 3600000;
-  const g0 = st1.gold;
-  const r0 = st1.rep;
-  const res8 = Engine.settleOffline(st1, NOW);
-  ok(!res8.capped, '8 小时未触顶(时长上限)');
-  near(res8.gold, 1.2 * 8 * 3600, 0.5, '离线金币≈1.2×8h');
-  near(st1.gold - g0, 1.2 * 8 * 3600, 0.5, '离线金币入账');
-  eq(st1.rep - r0, 34, '槽内跨 25/50/75 里程碑 +24，且满级转化 rep 型 +10');
-  eq(st1.npcs.t1_lin.asset, true, '8h 离线好感满级自动转化资产');
-  eq(st1.slots.indexOf('t1_lin'), -1, '满级后移出 slots');
-  near(st1.npcs.t1_lin.favor, B.FAVOR_MAX, 0.1, '8h 好感累计撞 FAVOR_MAX=100');
-  eq(st1.lastSeen, NOW, 'lastSeen 归位');
-
-  const st2 = fresh(); // 30 小时 → 12h 上限
-  Engine.npc(st2, 't1_gu').asset = true;
-  ok(Engine.addToSlot(st2, 't1_lin').ok, 'slot lin (30h)');
   st2.lastSeen = NOW - 30 * 3600000;
-  const res30 = Engine.settleOffline(st2, NOW);
-  ok(res30.capped, '30 小时触顶 capped=true');
-  near(res30.ms, 12 * 3600000, 1, '只结算 12 小时');
-  near(res30.gold, 1.2 * 12 * 3600, 0.5, '触顶金币=12h 上限量');
-  near(res30.favors[0].gained, B.FAVOR_MAX, 0.1, '触顶好感封顶于 FAVOR_MAX');
+  const rep2 = Engine.settleOffline(st2, NOW);
+  ok(rep2.capped, '30h 触顶 capped=true');
+  near(rep2.awayMs, 30 * 3600000, 1, 'awayMs 记录真实离开时长');
+
+  // 离线好感效率 50%
+  const st3 = fresh();
+  st3.lastSeen = NOW - 2 * 3600000;
+  const rep3 = Engine.settleOffline(st3, NOW);
+  near(rep3.favors[0].gained, 0.5 * 120 * 0.5, 0.1, '离线好感=在线速率×50%（offlineFavorRate）');
 })();
 
-// ── 17. fmtMoney ──
+// ── 18. 存档迁移 v1→v2 ──
 (function () {
-  eq(Engine.fmtMoney(999), '999', 'fmtMoney(999)→"999"');
-  eq(Engine.fmtMoney(12345), '1.23万', 'fmtMoney(12345)→"1.23万"');
-  eq(Engine.fmtMoney(1234567), '123万', 'fmtMoney(1234567)→"123万"（实现口径：≥100万 取整）');
-  eq(Engine.fmtMoney(3e8), '3亿', 'fmtMoney(3e8)→"3亿"');
+  const v1 = {
+    v: 1, createdAt: NOW, lastSeen: NOW, gold: 500, rep: 12, stamina: 55,
+    attrs: { charm: 2, talk: 1, taste: 3 }, slotCount: 4, slots: ['t1_lin'], tier: 1,
+    npcs: { t1_lin: { favor: 30, claimed: [25], asset: false, referred: false } },
+    seen: {}
+  };
+  const m = Engine.migrate(v1);
+  ok(m && m.v === 2, '迁移到 v2');
+  eq(m.gold, 500, '保留金币');
+  eq(m.slots[0], 't1_lin', '保留槽位');
+  eq(m.npcs.t1_lin.favor, 30, '保留好感');
+  eq(m.settings.decisionIntervalSec, 5, '补齐 settings 默认');
+  ok(Array.isArray(m.inv) && Array.isArray(m.drops), '补齐 v2 容器');
+  ok(Engine.migrate('garbage') === null, '损坏存档返回 null');
 })();
 
-// ── 18. 体力回复 ──
+// ── 19. 设置/GM ──
 (function () {
   const st = fresh();
-  st.stamina = 50;
-  st.stamTs = NOW - 9 * 60000;
-  Engine.tick(st, NOW);
-  eq(st.stamina, 53, '9 分钟回复 3 点体力');
+  Engine.setSetting(st, 'staminaRegenPerMin', 60);
+  eq(st.settings.staminaRegenPerMin, 60, 'setSetting 生效');
+  eq(st.customMode, true, '改动标记 customMode（01 §2.2）');
+  Engine.applyPreset(st, 'casual');
+  eq(st.customMode, false, '预设清除自定义标记');
+  eq(st.settings.staminaRegenPerMin, 40, '休闲预设 40/分');
+  Engine.gmGrant(st, 'gold', 1000);
+  eq(st.gold, 11000, 'GM 发金币');
+})();
+
+// ── 20. 属性升级（priceRate/画册半价）──
+(function () {
+  const st = fresh();
+  st.buffs.attrHalf = true;
+  const r = Engine.upgradeAttr(st, 'charm');
+  ok(r.ok && r.cost === 75 && !st.buffs.attrHalf, '画册半价生效并消耗');
 })();
 
 console.log('');

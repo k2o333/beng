@@ -9,7 +9,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node tests/test-engine.js",
+    "test": "node tests/test-engine.js && node tests/test-agent.js",
     "dist": "electron-builder --win nsis portable"
   },
   "devDependencies": {
