@@ -10,19 +10,46 @@
     "start": "electron .",
     "dev": "electron . --dev",
     "test": "node tests/test-engine.js && node tests/test-agent.js",
+    "sim": "node scripts/sim.js",
+    "balance": "node scripts/balance-report.js",
     "dist": "electron-builder --win nsis portable"
   },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.0.0",
+    "electron-builder": "^26.15.3",
+    "png-to-ico": "^3.0.2"
   },
   "build": {
     "appId": "com.beng.renmaibar",
     "productName": "RenmaiBar",
-    "directories": { "output": "dist" },
-    "files": ["main.js", "preload.js", "src/**/*", "assets/**/*"],
-    "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }, { "target": "portable", "arch": ["x64"] }]
+    "directories": {
+      "output": "dist"
     },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "assets/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

@@ -1,0 +1,910 @@
+{
+ "generatedAt": "2026-08-26T07:27:45.161Z",
+ "tool": "scripts/sim.js",
+ "repro": {
+  "gitHash": "1ff836d",
+  "node": "v24.9.0",
+  "inputs": {
+   "src/js/data/balance.js": {
+    "size": 32462,
+    "mtimeMs": 1787727265248
+   },
+   "src/js/data/npcs.js": {
+    "size": 9582,
+    "mtimeMs": 1787660556411
+   },
+   "src/js/data/items.js": {
+    "size": 4541,
+    "mtimeMs": 1787660578650
+   },
+   "src/js/engine.js": {
+    "size": 97379,
+    "mtimeMs": 1787726199410
+   },
+   "src/js/agent.js": {
+    "size": 16626,
+    "mtimeMs": 1787712603810
+   }
+  }
+ },
+ "config": {
+  "strategy": "lavish-deep",
+  "runsCompleted": 20,
+  "runsRequested": 20,
+  "quick": true,
+  "truncatedByWallclock": false,
+  "partial": false,
+  "days": 100,
+  "chunkMs": 300000,
+  "seed": 42,
+  "node": "v24.9.0"
+ },
+ "methodNotes": [
+  "口径：headless 复用 engine.step/execAction/Agent.decide；时间步进 dt=300000ms 游戏时/步，每步边界先跑元策略再循环 decide+execAction（受动作自身 CD/预算/体力自然截断），nowReal=noon 基准随游戏时推进（night-owl 固定 20:00）",
+  "收入归因法：工资=step 的 wage 事件金额；小费=work 事件文本解析；业务=biz 事件 gold+allowance；里程碑=milestone(kind=gold) 事件金额；掉落金包=本模拟器自行调用 collectDrop 时按 drop.kind==gold 的金币增量；售物=collectDrop 返回的 {t:\"autosell\"} 事件金额（autoSellGrade 默认 off 时该分支潜在不触发，实际售物主要来自背包压力手动 sellItem 返回值）。事件不带金额处一律用状态增量补齐。",
+  "近似1（night-owl）：把现实钟固定在 20:00（餐厅晚班 ×1.5 与夜窗词条恒定生效），代表「只在夜间上号」的理想化夜猫子。",
+  "近似2：掉落即拾即收（等价 autoPickup，忽略 3 秒真实延迟）；日切当天收入整段计入新的一天（误差 ≤1 个 dt）。",
+  "近似3（决策节流，突发 vs 节流的显式差异）：decide 返回空或动作执行失败后 330s 游戏时（NULL_SKIP_MS=CHUNK_MS+30s）内不再尝试；模拟在一个 dt 块内最多连发 20 个决策然后可能长空闲。而 app.js 心跳是每 decisionIntervalSec=5 真实秒至多一次 decide+execAction、成功与否都等下一拍且时间均匀推进——两者动作吞吐形态不同（模拟偏突发+长空闲，真实端均匀节流），对比真实遥测时应注意该偏差。",
+  "近似4（玩家元策略，非 Agent 职责）：行业固定 finance；体力≥80% 即排班（night-owl 资产≥3 后换便利店夜班 4h）；品味朝下一圈层需求与大礼门槛购买；charm/talk 在金币≥10×成本且不影响入场费时购买；槽位费 3 倍余额时扩容；技能点按策略优先序「银行制」点亮——最高未亮节点若只差点数（cost 态），按近 10 日点数流速估算缺口到达时间：≤6 游戏日则冻结低优支出攒点直取（银行生效），>H（点流枯竭）则放弃银行按序消费（synergy-early 先试 y1/y2/y3 连携、lavish-deep 直取 s16 知心、night-owl 首取 k2a 夜窗基石、frugal-net 取 k1a 广撒网基石）；精华位二选一（S8）按节点本意取 warm/snow/read/cash。基石均受 gate=职级8 限制，前期点不出来属引擎设定而非模拟器缺陷。",
+  "近似4b（元策略·物品面，alpha4 补）：每 chunk 自动装备——某槽背包中存在严格更高品质装备（GRADE_RANK 比较）且当前槽为空/更低品质时调 Engine.equipItemFromInv（计数 equipActions）；当下一圈层入场仅被声望卡住（canEnterTier 仅缺声望）且背包有 intel_brief（effect.kind=rep）时使用一件（计数 repItemUses）。除此之外不用消耗品，H2/后期数字仍不含 buff_date/buff_attr/free_date 等主动用法。",
+  "近似5：standard/lavish/night/synergy 的排槽由模拟器按「高层级>产出分」手动补满（autoSlotOrder 默认 off 是引擎出厂值）；仅 frugal-net 走 Agent.refillQueue(gap)。lavish-deep 同时在攻目标钳制 ≤3（深耕）。",
+  "近似6：粗步长伪影——好感在单个 dt 内可跳过整个阶段区间，导致 errand（需好感≥75 且未转资产的窗口）在模拟中几乎不可触发，H4 以静态性价比表为准；尖峰比值（单日增量÷前7日均值）在指数增长曲线上必然高位，>3 的标记应读作「复利型增长」而非数值事故。",
+  "里程碑天数以游戏日（gt/DAY_MS）计，分辨率=1 个 dt。collectDrop 异常会被跳过但计入 dropsFailed 口径。"
+ ],
+ "perf": {
+  "avgMsPerRun": 25307,
+  "avgActionsPerDay": 12.5,
+  "runsFailed": 0
+ },
+ "throughput": {
+  "nullDecisionRatePct": 92,
+  "dailyBudgetSatPct": 2.6,
+  "perNpcBudgetSatPct": 0.5,
+  "lateGameSaturationPct": 0,
+  "lateGameSatFlag": false
+ },
+ "equipmentMeta": {
+  "equipActionsTotal": 102,
+  "avgEquipActionsPerDay": 0.05,
+  "repItemUsesAvgPerRun": 4034.6
+ },
+ "dropsFailed": 0,
+ "skillBank": {
+  "bankedTicksTotal": 40
+ },
+ "litNodes": {
+  "histogram": {
+   "c11": 20,
+   "c12": 20,
+   "c13": 20,
+   "i11": 20,
+   "i12": 20,
+   "i13": 20,
+   "i14": 20,
+   "i15": 20,
+   "s11": 20,
+   "s12": 20,
+   "s13": 20,
+   "s14": 20,
+   "s15": 20
+  },
+  "distinctSets": [
+   {
+    "set": [
+     "c11",
+     "c12",
+     "c13",
+     "i11",
+     "i12",
+     "i13",
+     "i14",
+     "i15",
+     "s11",
+     "s12",
+     "s13",
+     "s14",
+     "s15"
+    ],
+    "runs": 20
+   }
+  ],
+  "topPending": {
+   "s16·cost": 20
+  }
+ },
+ "blockers": [
+  {
+   "key": "tier2",
+   "label": "T2精英圈",
+   "total": 20,
+   "failed": 0
+  },
+  {
+   "key": "tier3",
+   "label": "T3名流圈",
+   "total": 20,
+   "failed": 0
+  },
+  {
+   "key": "tier4",
+   "label": "T4富豪圈",
+   "total": 20,
+   "failed": 0
+  },
+  {
+   "key": "tier5",
+   "label": "T5顶层圈",
+   "total": 20,
+   "failed": 0
+  },
+  {
+   "key": "career4",
+   "label": "职级4 主管",
+   "total": 20,
+   "failed": 0
+  },
+  {
+   "key": "career6",
+   "label": "职级6 经理",
+   "total": 20,
+   "failed": 0
+  },
+  {
+   "key": "career8",
+   "label": "职级8 总监",
+   "total": 20,
+   "failed": 0
+  },
+  {
+   "key": "career10",
+   "label": "职级10 总裁",
+   "total": 20,
+   "failed": 0
+  }
+ ],
+ "timetable": [
+  {
+   "key": "firstAsset",
+   "label": "首资产",
+   "rate": 1,
+   "P25": 0.98,
+   "P50": 0.99,
+   "P75": 0.99
+  },
+  {
+   "key": "tier2",
+   "label": "进入T2精英圈",
+   "rate": 1,
+   "P25": 4.15,
+   "P50": 4.26,
+   "P75": 4.34
+  },
+  {
+   "key": "tier3",
+   "label": "进入T3名流圈",
+   "rate": 1,
+   "P25": 11.72,
+   "P50": 11.78,
+   "P75": 11.82
+  },
+  {
+   "key": "tier4",
+   "label": "进入T4富豪圈",
+   "rate": 1,
+   "P25": 24.1,
+   "P50": 24.34,
+   "P75": 24.48
+  },
+  {
+   "key": "tier5",
+   "label": "进入T5顶层圈",
+   "rate": 1,
+   "P25": 43.21,
+   "P50": 43.48,
+   "P75": 43.67
+  },
+  {
+   "key": "career2",
+   "label": "职级2 专员",
+   "rate": 1,
+   "P25": 1.56,
+   "P50": 1.57,
+   "P75": 1.58
+  },
+  {
+   "key": "career4",
+   "label": "职级4 主管",
+   "rate": 1,
+   "P25": 4.95,
+   "P50": 4.97,
+   "P75": 4.99
+  },
+  {
+   "key": "career6",
+   "label": "职级6 经理",
+   "rate": 1,
+   "P25": 11.89,
+   "P50": 12.12,
+   "P75": 12.44
+  },
+  {
+   "key": "career8",
+   "label": "职级8 总监",
+   "rate": 1,
+   "P25": 24.19,
+   "P50": 24.48,
+   "P75": 24.81
+  },
+  {
+   "key": "career10",
+   "label": "职级10 总裁",
+   "rate": 1,
+   "P25": 48.29,
+   "P50": 49.5,
+   "P75": 50.07
+  },
+  {
+   "key": "allAch",
+   "label": "全成就",
+   "rate": 0,
+   "P25": null,
+   "P50": null,
+   "P75": null
+  },
+  {
+   "key": "pet_nuanshou",
+   "label": "宠物·伙伴·暖手 III 阶",
+   "rate": 0,
+   "P25": null,
+   "P50": null,
+   "P75": null
+  },
+  {
+   "key": "pet_zhangfang",
+   "label": "宠物·伙伴·账房 III 阶",
+   "rate": 0,
+   "P25": null,
+   "P50": null,
+   "P75": null
+  },
+  {
+   "key": "pet_shihuang",
+   "label": "宠物·伙伴·拾荒 III 阶",
+   "rate": 1,
+   "P25": 5.85,
+   "P50": 5.89,
+   "P75": 5.92
+  }
+ ],
+ "goldCurve": {
+  "p25": [
+   385,
+   166244,
+   658327,
+   1198255,
+   1700731,
+   3145557,
+   4689095,
+   6367816,
+   8093753,
+   9737008,
+   11365615,
+   12694089,
+   16140455,
+   19814995,
+   16191435,
+   19305984,
+   23426970,
+   27592312,
+   31782380,
+   35930824,
+   40122828,
+   44294228,
+   48530683,
+   52457389,
+   26599597,
+   40135851,
+   53950530,
+   67710703,
+   81241845,
+   94846722,
+   108617595,
+   122262469,
+   135985808,
+   150005644,
+   165283250,
+   180579210,
+   196082580,
+   212019571,
+   227846517,
+   243530759,
+   259392044,
+   275094644,
+   289351530,
+   162435816,
+   206724997,
+   250969090,
+   294903144,
+   339057405,
+   384991684,
+   430051449,
+   480692242,
+   531275729,
+   581873107,
+   632548254,
+   683491425,
+   733924498,
+   784354150,
+   834996075,
+   885840843,
+   936244506,
+   986918465,
+   1037191323,
+   1087772003,
+   1138456796,
+   1188987822,
+   1239550908,
+   1290356556,
+   1340731168,
+   1391208873,
+   1441921827,
+   1492478694,
+   1542981736,
+   1593770859,
+   1644248357,
+   1694929307,
+   1745358920,
+   1795880147,
+   1846669305,
+   1897393339,
+   1947849353,
+   1998640843,
+   2049080960,
+   2099613204,
+   2150257389,
+   2200706865,
+   2251539201,
+   2302173091,
+   2352747816,
+   2403423310,
+   2454211464,
+   2504754709,
+   2555214639,
+   2606120603,
+   2656863577,
+   2707568115,
+   2758226522,
+   2808674035,
+   2859181134,
+   2909529793,
+   2959917795,
+   2959917795
+  ],
+  "p50": [
+   515,
+   182057,
+   672001,
+   1202167,
+   1727428,
+   3174869,
+   4742332,
+   6410447,
+   8164772,
+   9793911,
+   11412893,
+   12763691,
+   16360127,
+   20051496,
+   23063611,
+   19738187,
+   23921200,
+   28123497,
+   32404471,
+   36601170,
+   40810014,
+   45086309,
+   49314411,
+   52885590,
+   28604379,
+   42094661,
+   55823747,
+   69450034,
+   83181484,
+   96791672,
+   110577098,
+   124308488,
+   138575782,
+   153893109,
+   169184915,
+   184502924,
+   199867738,
+   215623377,
+   231523993,
+   247293271,
+   263162115,
+   278858520,
+   292618599,
+   169782103,
+   212635849,
+   256621720,
+   300575338,
+   344630568,
+   390686300,
+   436216493,
+   485906131,
+   536277602,
+   586996484,
+   637495768,
+   687922924,
+   738694870,
+   789409666,
+   839773330,
+   890383456,
+   941139334,
+   991495621,
+   1042253548,
+   1092872012,
+   1143638931,
+   1194351669,
+   1244956482,
+   1295485333,
+   1345864313,
+   1396592152,
+   1447228663,
+   1497725279,
+   1548126018,
+   1598744808,
+   1649259074,
+   1699817248,
+   1750486441,
+   1801033367,
+   1851661028,
+   1902471037,
+   1953130248,
+   2003680922,
+   2054275301,
+   2104940988,
+   2155511654,
+   2205976257,
+   2256678398,
+   2307112875,
+   2357781039,
+   2408314724,
+   2458895492,
+   2509660364,
+   2560182385,
+   2610894530,
+   2661498233,
+   2712379793,
+   2762987927,
+   2813713285,
+   2864402491,
+   2915005287,
+   2965842320,
+   2965842320
+  ],
+  "p75": [
+   773,
+   192666,
+   689285,
+   1235144,
+   1754209,
+   3210758,
+   4764115,
+   6453946,
+   8213639,
+   9858354,
+   11473759,
+   12883124,
+   16498350,
+   20189457,
+   23667473,
+   20372889,
+   24559212,
+   28731480,
+   32835458,
+   37061884,
+   41226638,
+   45425036,
+   49675005,
+   53773737,
+   30818825,
+   43998468,
+   57707835,
+   71323335,
+   84948454,
+   98660527,
+   112236266,
+   126312555,
+   141051504,
+   155793506,
+   170949827,
+   186350022,
+   201767860,
+   217444834,
+   233346062,
+   249140072,
+   265100150,
+   281020477,
+   295339900,
+   187081113,
+   218566641,
+   262712905,
+   307085256,
+   351837930,
+   400074096,
+   449486729,
+   500108369,
+   550701050,
+   601215401,
+   651490129,
+   702244708,
+   752991598,
+   803655098,
+   854137758,
+   905055289,
+   955688466,
+   1006142408,
+   1056585173,
+   1107395202,
+   1158080691,
+   1208644556,
+   1259413638,
+   1309962476,
+   1360280836,
+   1410778422,
+   1461373451,
+   1511907210,
+   1562558034,
+   1613413991,
+   1663741150,
+   1714279617,
+   1764832528,
+   1815277867,
+   1865897787,
+   1916695515,
+   1967266459,
+   2017914782,
+   2068159813,
+   2118920514,
+   2169353727,
+   2220098677,
+   2270739819,
+   2321216453,
+   2372017248,
+   2422560311,
+   2473365855,
+   2524100739,
+   2574605364,
+   2625048723,
+   2675659627,
+   2726613340,
+   2777388607,
+   2828079007,
+   2878721637,
+   2929220973,
+   2979996312,
+   2979996312
+  ]
+ },
+ "datesCurve": {
+  "d15": 7,
+  "d30": 7,
+  "d45": 7,
+  "d60": 7,
+  "d75": 7,
+  "d90": 7,
+  "d100": 7
+ },
+ "incomeShares": {
+  "early": {
+   "wage": 0,
+   "tips": 0,
+   "biz": 50,
+   "dropGold": 47.1,
+   "itemSell": 2.9,
+   "milestone": 0.1
+  },
+  "mid": {
+   "wage": 0,
+   "tips": 0,
+   "biz": 80.6,
+   "dropGold": 18.8,
+   "itemSell": 0.6,
+   "milestone": 0
+  },
+  "late": {
+   "wage": 0,
+   "tips": 0,
+   "biz": 83.2,
+   "dropGold": 16.3,
+   "itemSell": 0.5,
+   "milestone": 0
+  }
+ },
+ "incomeLateP50Share": {
+  "wage": 0,
+  "tips": 0,
+  "biz": 83.2,
+  "dropGold": 16.3,
+  "itemSell": 0.5,
+  "milestone": 0
+ },
+ "h1LateDomination": null,
+ "efficiency": [
+  {
+   "tier": 1,
+   "type": "date:light",
+   "n": 46,
+   "goldPerFavor": 93.3,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 1,
+   "type": "date:meal",
+   "n": 31,
+   "goldPerFavor": 78,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 1,
+   "type": "gift:large",
+   "n": 225,
+   "goldPerFavor": 279.5,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 2,
+   "type": "gift:large",
+   "n": 128,
+   "goldPerFavor": 402.2,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 3,
+   "type": "gift:large",
+   "n": 38,
+   "goldPerFavor": 1999.1,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 1,
+   "type": "gift:mid",
+   "n": 58,
+   "goldPerFavor": 199.7,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 1,
+   "type": "gift:small",
+   "n": 476,
+   "goldPerFavor": 171.4,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 1,
+   "type": "identify",
+   "n": 233,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 5.97
+  },
+  {
+   "tier": 2,
+   "type": "identify",
+   "n": 82,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 5.26
+  },
+  {
+   "tier": 3,
+   "type": "identify",
+   "n": 105,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 5.01
+  },
+  {
+   "tier": 4,
+   "type": "identify",
+   "n": 100,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 1.46
+  },
+  {
+   "tier": 5,
+   "type": "identify",
+   "n": 85,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 1.46
+  },
+  {
+   "tier": 1,
+   "type": "interact",
+   "n": 6433,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 230.7
+  },
+  {
+   "tier": 2,
+   "type": "interact",
+   "n": 1410,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 37.32
+  },
+  {
+   "tier": 3,
+   "type": "interact",
+   "n": 2249,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 40.19
+  },
+  {
+   "tier": 4,
+   "type": "interact",
+   "n": 2220,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 42.79
+  },
+  {
+   "tier": 5,
+   "type": "interact",
+   "n": 990,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 47.13
+  },
+  {
+   "tier": 1,
+   "type": "item",
+   "n": 321,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 2,
+   "type": "item",
+   "n": 1130,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 3,
+   "type": "item",
+   "n": 1304,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 4,
+   "type": "item",
+   "n": 2168,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 5,
+   "type": "item",
+   "n": 873,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 1,
+   "type": "moments",
+   "n": 1043,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 2,
+   "type": "moments",
+   "n": 162,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 3,
+   "type": "moments",
+   "n": 175,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 4,
+   "type": "moments",
+   "n": 146,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 5,
+   "type": "moments",
+   "n": 128,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 0
+  },
+  {
+   "tier": 1,
+   "type": "wechat",
+   "n": 1035,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 10
+  },
+  {
+   "tier": 2,
+   "type": "wechat",
+   "n": 162,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 10
+  },
+  {
+   "tier": 3,
+   "type": "wechat",
+   "n": 175,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 10
+  },
+  {
+   "tier": 4,
+   "type": "wechat",
+   "n": 146,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 10
+  },
+  {
+   "tier": 5,
+   "type": "wechat",
+   "n": 111,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 10
+  },
+  {
+   "tier": 1,
+   "type": "workplace",
+   "n": 862,
+   "goldPerFavor": 0,
+   "staminaPerFavor": 6.05
+  }
+ ],
+ "zeroActionTypes": [],
+ "deadZones": [
+  {
+   "pair": "T1→T2 停留",
+   "P50": 4.26,
+   "targetUpperDays": 5,
+   "flag": false
+  },
+  {
+   "pair": "T2→T3 停留",
+   "P50": 7.55,
+   "targetUpperDays": 14,
+   "flag": false
+  },
+  {
+   "pair": "T3→T4 停留",
+   "P50": 12.63,
+   "targetUpperDays": 30,
+   "flag": false
+  },
+  {
+   "pair": "T4→T5 停留",
+   "P50": 19.16,
+   "targetUpperDays": 60,
+   "flag": false
+  }
+ ],
+ "spikes": {
+  "P50maxRatio": 25.99,
+  "P75maxRatio": 72.41,
+  "flagThreshold": 3,
+  "flaggedRunFrac": 100
+ },
+ "extras": {
+  "avgErrandPerRun": 0.2,
+  "avgRareEquipPerRun": 494.5,
+  "avgAttrBuysPerRun": 90,
+  "endAttrsP50": {
+   "taste": 50,
+   "charm": 20,
+   "talk": 20
+  }
+ }
+}

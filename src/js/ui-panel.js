@@ -1,19 +1,20 @@
-// 面板渲染 v2：攻略/背包/工作/属性/圈层/设置/管理后台 七页 + 离线简报与确认弹窗
-// 契约：docs/dev/v2-api.md §4
+﻿// 面板渲染 v2：攻略/背包/工作/成长/属性/圈层/设置/管理后台 八页 + 离线简报与确认弹窗
+// 契约：docs/dev/v2-api.md §4；alpha3 新增成长页（职业业务/天赋网/装备/宠物）
 (function () {
-  const TITLES = { gonglue: '攻略', beibao: '背包', gongzuo: '工作', shuxing: '属性', quanceng: '圈层', shezhi: '设置', houtai: '管理后台' };
+  const TITLES = { gonglue: '攻略', beibao: '背包', gongzuo: '工作', chengzhang: '成长', shuxing: '属性', quanceng: '圈层', shezhi: '设置', houtai: '管理后台' };
   const TYPE_TXT = { money: '金钱型', rep: '声望型', aux: '辅助型' };
   const STATUS_TXT = { locked: '未解锁', available: '可攻略', courting: '攻略中', asset: '人脉资产' };
   const STAGE_BADGE = { ice: '破冰', warm: '升温', deep: '深交', close: '收网' };
   const Q_TXT = { common: '普通', fine: '精致', rare: '稀有' };
 
   // Wave2-U：分类页签 / 合成多选 / 详情弹窗（UI 侧状态，不入档）
-  const BAG_TABS = [['all', '全部'], ['gift', '礼物'], ['consume', '消耗'], ['ticket', '票券'], ['func', '功能']];
+  const BAG_TABS = [['all', '全部'], ['gift', '礼物'], ['consume', '消耗'], ['ticket', '票券'], ['func', '功能'], ['equip', '装备']];
   const KIND_TAB_MAP = {
     gift: ['send_gift', 'send_favor'],
     consume: ['stamina', 'favor_random', 'favor_all', 'rep'],
     ticket: ['free_date'],
-    func: ['buff_date', 'buff_attr', 'unlock_next']
+    func: ['buff_date', 'buff_attr', 'unlock_next'],
+    equip: ['equip']
   };
   const ROSTER_TABS = [['all', '全部'], ['available', '可攻略'], ['courting', '攻略中'], ['asset', '人脉资产'], ['referred', '已引荐']];
   let bagTab = 'all';
@@ -110,6 +111,7 @@
     if (cur === 'gonglue') body.innerHTML = htmlGonglue();
     else if (cur === 'beibao') body.innerHTML = htmlBeibao();
     else if (cur === 'gongzuo') body.innerHTML = htmlGongzuo();
+    else if (cur === 'chengzhang') body.innerHTML = htmlChengzhang();
     else if (cur === 'shuxing') body.innerHTML = htmlShuxing();
     else if (cur === 'quanceng') body.innerHTML = htmlQuanceng();
     else if (cur === 'shezhi') body.innerHTML = htmlShezhi();
@@ -260,7 +262,16 @@
       + (intel.line ? '（引荐线索已揭示）' : '')
       + (intel.mine ? ' <i class="mine">雷区：' + esc(def.mine) + '</i>' : '') + '</div>';
     h += '<div class="dossier gold"><b>【一句价值】</b>' + esc(dos.value) + '</div>';
+    // alpha4 S3 掉率公示（红线 4「掉率透明」）：读档内 settings（后台可调），缺省回落全局默认
+    h += '<div class="dossier"><b>【掉落公示】</b>稀有 ' + Math.round(setRate(st, 'rareItemRate', SETTINGS_DEFAULT.rareItemRate) * 100)
+      + '%·' + BALANCE.LOOT.PITY_RARE + ' 次保底 / 装备 ' + Math.round(setRate(st, 'equipDropRate', SETTINGS_DEFAULT.equipDropRate) * 100)
+      + '%·' + BALANCE.LOOT.PITY_EQUIP + ' 次保底（辅助型稀有率 ×2）</div>';
     return h;
+  }
+
+  // 读档内 settings 数值（后台可调），非法/缺失回落全局默认
+  function setRate(st, k, d) {
+    return st && st.settings && typeof st.settings[k] === 'number' ? st.settings[k] : d;
   }
 
   function spendMenu(st, def, ns) {
@@ -344,6 +355,17 @@
     return e && ITEM_BY_ID[e.it] ? e : null;
   }
 
+  function pityVals(st) {
+    const L = BALANCE.LOOT;
+    const loot = st.loot || {};
+    return {
+      rare: Math.min(L.PITY_RARE, loot.pityRare || 0),
+      equip: Math.min(L.PITY_EQUIP, loot.pityEquip || 0),
+      PR: L.PITY_RARE,
+      PE: L.PITY_EQUIP
+    };
+  }
+
   function htmlBeibao() {
     const st = App.state;
     const cap = Engine.invCap(st);
@@ -365,6 +387,19 @@
       h += '<button class="btn primary" data-action="synth-run"' + (canSynth ? '' : ' disabled') + '>合成'
         + (selGrade && selGrade !== 'rare' ? ' → ' + Q_TXT[BALANCE.NEXT_GRADE[selGrade]] : '') + '</button>';
     }
+    h += '</div>';
+
+    // alpha4 S3 掉落透明保底（03 §S3）：两条计数进度条，updateDynamic 实时刷新
+    const pv = pityVals(st);
+    h += '<div class="set-group"><div class="set-label">掉落保底</div>';
+    h += '<div class="pity-row"><span class="pity-label">稀有品质</span>'
+      + '<div class="biz-track"><i id="pity-rare-bar" style="width:' + (pv.rare / pv.PR * 100) + '%"></i></div>'
+      + '<span class="pity-txt" id="pity-rare-txt">' + pv.rare + '/' + pv.PR + '</span></div>';
+    h += '<div class="pity-row"><span class="pity-label">装备</span>'
+      + '<div class="biz-track"><i id="pity-equip-bar" style="width:' + (pv.equip / pv.PE * 100) + '%"></i></div>'
+      + '<span class="pity-txt" id="pity-equip-txt">' + pv.equip + '/' + pv.PE + '</span></div>';
+    h += '<div class="pity-hint">掉率透明：稀有 ' + Math.round(setRate(st, 'rareItemRate', SETTINGS_DEFAULT.rareItemRate) * 100)
+      + '%（辅助位 ×2）、装备 ' + Math.round(setRate(st, 'equipDropRate', SETTINGS_DEFAULT.equipDropRate) * 100) + '%；计数满自动触发</div>';
     h += '</div>';
 
     const list = [];
@@ -541,6 +576,244 @@
     return m >= 60 ? Math.floor(m / 60) + '小时' + (m % 60) + '分' : m + '分钟';
   }
 
+  // ══ 成长（alpha3：职业业务 / 天赋网 / 装备 / 宠物）══
+  function htmlChengzhang() {
+    const st = App.state;
+    let h = '';
+    h += careerSection(st);
+    h += skillsSection(st);
+    h += equipSection(st);
+    h += petsSection(st);
+    return h;
+  }
+
+  function careerSection(st) {
+    const c = st.career;
+    const lv = Engine.careerLvDef(st);
+    let h = '<div class="set-group"><div class="set-label">行业方向（决定业务模板池）</div><div class="set-row">';
+    BALANCE.DOMAINS.forEach((d) => {
+      h += '<button class="btn' + (c.industry === d ? ' primary' : '') + '" data-action="biz-industry" data-d="' + d + '">'
+        + BALANCE.DOMAIN_TXT[d] + '</button>';
+    });
+    h += '</div>';
+
+    // 职级与进度
+    const nextLv = BALANCE.CAREER_LEVELS[c.level] || null;
+    const needNext = nextLv ? nextLv.need * (st.settings.bizThresholdMul || 1) : null;
+    h += '<div class="attr-row"><div class="attr-info">'
+      + '<div class="attr-name">' + lv.title + '<span class="lv">Lv.' + c.level + '</span>'
+      + '<span class="lv dim-lv">提成 ' + Math.round(lv.rate * 100) + '% · 津贴 ' + Engine.fmtMoney(lv.allowance) + '/周期</span></div>'
+      + '<div class="attr-desc">累计业务量 <b>' + Engine.fmtVol(c.bizVolumeTotal) + '</b>'
+      + (nextLv ? ' / 升职需 ' + Engine.fmtVol(needNext) : '（已至打工顶点）') + '</div>';
+    if (nextLv) {
+      const pct = Math.max(0, Math.min(100, c.bizVolumeTotal / needNext * 100));
+      h += '<div class="biz-track"><i style="width:' + pct + '%"></i></div>';
+    }
+    h += '</div></div>';
+
+    // 人脉四维
+    const net = Engine.networkOf(st);
+    h += '<div class="net-row">'
+      + '<span class="net-chip">金融 ' + Math.floor(net.finance) + '</span>'
+      + '<span class="net-chip">地产 ' + Math.floor(net.estate) + '</span>'
+      + '<span class="net-chip">高科技 ' + Math.floor(net.tech) + '</span>'
+      + '<span class="net-chip total">总人脉 ' + Math.floor(net.total) + '</span></div>';
+
+    // 当前业务单
+    const cbz = c.currentBiz;
+    h += '<div class="set-label">当前业务单（现实 ' + Math.round(BALANCE.BIZ_CYCLE_MIN * st.settings.bizSpeed) + ' 分钟/单 · 放置自动跑）</div>';
+    if (!c.industry) {
+      h += '<div class="lock-line">先选一个行业方向——人脉会通过好感里程碑自动积累。</div>';
+    } else if (cbz) {
+      const tpl = BALANCE.BIZ_TEMPLATES.find((t) => t.id === cbz.tplId);
+      const pct = Math.max(0, Math.min(100, cbz.doneMs / cbz.workMs * 100));
+      const left = Math.max(0, cbz.workMs - cbz.doneMs);
+      h += '<div class="biz-card"><div class="attr-info">'
+        + '<div class="attr-name">' + tpl.name + '<span class="lv">效率 ' + Math.round(cbz.eff * 100) + '%</span>'
+        + (cbz.jit ? '<span class="lv dim-lv" title="风险单开工时掷定的效率浮动（区间 [0.7,1.3]，结算时生效）">浮动 ×'
+          + (Math.round(cbz.jit * 100) / 100) + '</span>' : '')
+        + boomBadgeHtml(st, tpl.domain) + '</div>'
+        + '<div class="attr-desc">基准量 ' + Engine.fmtVol(tpl.vol) + ' · 工时 ' + tpl.workMin + '分'
+        + ' · 预计入账 ≈' + Engine.fmtMoney(bizExpectedGold(st, tpl, cbz)) + '</div>'
+        + '<div class="biz-track"><i id="biz-bar" style="width:' + pct + '%"></i></div>'
+        + '<div class="attr-effect">剩余 <b id="biz-left">' + fmtLeft(left) + '</b></div>'
+        + '</div></div>';
+    } else {
+      h += '<div class="lock-line">空闲中——放置期会自动接单。</div>';
+    }
+
+    // 模板池
+    h += '<div class="set-label">业务机会（手动换单' + (Engine.hasSkill(st, 'c16') ? '，总裁思维保留进度' : '会重置当前单进度') + '）</div>';
+    const net2 = Engine.networkOf(st);
+    let any = false;
+    BALANCE.BIZ_TEMPLATES.forEach((tpl) => {
+      if (tpl.domain !== c.industry) return;
+      if (!Engine.tierOpen(st, tpl.tier)) return;
+      any = true;
+      const lvOk = c.level >= tpl.reqLevel;
+      const { eff, gaps, full } = Engine.bizEfficiency(st, tpl, net2);
+      const reqTxt = reqTextOf(tpl);
+      const curBiz = cbz && cbz.tplId === tpl.id;
+      h += '<div class="attr-row' + (curBiz ? ' current' : '') + '"><div class="attr-info">'
+        + '<div class="attr-name">' + tpl.name + (curBiz ? '<span class="lv">进行中</span>' : '')
+        + (tpl.certainty === 'risky'
+          ? '<i class="qtag q-rare" title="风险单：开工时效率在 [0.7,1.3] 均匀掷（期望 ×1.0），基准量已含 +15% 风险溢价">风险单</i>' : '')
+        + boomBadgeHtml(st, tpl.domain)
+        + '<span class="lv dim-lv">' + BALANCE.DOMAIN_TXT[tpl.domain] + ' T' + tpl.tier + '</span></div>'
+        + '<div class="attr-desc">' + reqTxt + ' · 基准量 ' + Engine.fmtVol(tpl.vol) + ' · 工时 ' + tpl.workMin + '分'
+        + (tpl.reqLevel > 1 ? ' · 需职级 Lv.' + tpl.reqLevel : '') + '</div>'
+        + (full
+          ? '<div class="attr-effect ok-eff">条件全满足 · 效率 100%' + (Engine.hasSkill(st, 'k3b') ? '（豪赌派业务量+30%）' : '') + '</div>'
+          : '<div class="attr-effect lack">效率 ' + Math.round(eff * 100) + '% · ' + esc(gaps.filter((g) => g.indexOf('慧眼') < 0).join('；') || '') + '</div>')
+        + '</div>'
+        + (lvOk ? '' : '<span class="lack">Lv.' + tpl.reqLevel + '</span>')
+        + '<button class="btn' + (full ? ' primary' : '') + '" data-action="biz-pick" data-tpl="' + tpl.id + '"'
+        + (lvOk && !curBiz ? '' : ' disabled') + '>接单</button></div>';
+    });
+    if (!any) h += '<div class="lock-line">该行业暂无可接业务——升职或进圈层解锁更多。</div>';
+    h += '</div>';
+    return h;
+  }
+  function bizExpectedGold(st, tpl, cbz) {
+    return tpl.vol * Engine.commissionRateOf(st) * Math.sqrt(Engine.tierDef(st.tier).mult)
+      * BALANCE.COMMISSION_PER_WAN * (st.settings.commissionScale || 1);
+  }
+  // alpha4 S1：行业景气角标（title 公示 ±% 口径，与结算乘区一致）
+  const BOOM_TAG = { boom: ['景气↑', 'ref-badge'], stable: ['平稳', 'qtag'], low: ['低谷↓', 'qtag lack'] };
+  function boomBadgeHtml(st, domain) {
+    const bm = Engine.boomOf(st, domain);
+    const tag = BOOM_TAG[bm] || BOOM_TAG.stable;
+    const pct = bm === 'boom'
+      ? '+' + Math.round((st.settings.boomScale || 0.2) * 100) + '%'
+      : (bm === 'low' ? '-' + Math.round((st.settings.boomLowScale || 0.15) * 100) + '%' : '±0%');
+    return '<i class="' + tag[1] + '" title="行业景气（每周轮换）：该行业业务量与人脉计入 ' + pct + '">' + tag[0] + '</i>';
+  }
+  function reqTextOf(tpl) {
+    const parts = [];
+    for (const d in tpl.reqNet) parts.push(BALANCE.DOMAIN_TXT[d] + '≥' + tpl.reqNet[d]);
+    tpl.reqTypes.forEach((rt) => parts.push(TYPE_TXT[rt.t] + '×' + rt.n));
+    return parts.length ? parts.join('，') : '无人脉门槛';
+  }
+
+  function skillsSection(st) {
+    const sk = st.skills;
+    const SK = BALANCE.SKILLS;
+    let h = '<div class="set-group"><div class="set-label">关系天赋网'
+      + '　可用技能点 <b>' + sk.points + '</b> · 已投 ' + Engine.skillPointsInvested(st) + '</div>';
+    // alpha4 S7 Build 预设：一键点亮流派合法子集（confirm 后经 skill-preset 应用）
+    h += '<div class="set-row">'
+      + '<span class="hint">官方预设：</span>';
+    Object.keys(BALANCE.SKILL_PRESETS).forEach((k) => {
+      h += '<button class="btn tiny-btn" data-action="skill-preset" data-id="' + k + '"'
+        + ' title="一键点亮该流派合法节点子集（点数/前置/互斥/门槛自动校验，剩余自由点留给玩家）">'
+        + BALANCE.SKILL_PRESETS[k].name + '</button>';
+    });
+    h += '</div>';
+    SK.branchOrder.forEach((br) => {
+      h += '<div class="skill-branch"><div class="branch-name">' + SK.branches[br] + '（已投 ' + Engine.branchInvested(st, br) + ' 点）</div>';
+      Object.keys(SK.nodes).forEach((id) => {
+        const nd = SK.nodes[id];
+        if (nd.br !== br) return;
+        const state_ = Engine.skillNodeState(st, id);
+        const lit = state_.st === 'lit';
+        const can = state_.st === 'can';
+        // S8 泛化二选一：任意 choice 节点共用同一套选择/点亮按钮（s14 沿用）
+        const isChoice = Array.isArray(nd.choice);
+        let extra = '';
+        if (isChoice && lit) {
+          extra = '<div class="choice-row">' + nd.choice.map((ck) =>
+            '<button class="btn tiny-btn' + (sk.nodes[id] === ck ? ' primary' : '')
+            + '" data-action="skill-choice" data-node="' + id + '" data-c="' + ck + '">'
+            + esc(nd.choiceTxt[ck]) + '</button>').join('') + '</div>';
+        }
+        const takeBtns = (isChoice && !lit)
+          ? nd.choice.map((ck) => '<button class="btn tiny-btn primary" data-action="skill-take" data-node="' + id
+            + '" data-c="' + ck + '">点亮·' + esc(nd.choiceTxt[ck]) + '</button>').join('')
+          : (!lit ? '<button class="btn tiny-btn' + (can ? ' primary' : '') + '" data-action="skill-take" data-node="' + id + '"'
+            + (can ? '' : ' disabled') + '>点亮</button>' : '');
+        h += '<div class="node-row ' + nd.layer + (lit ? ' lit' : '') + (can ? ' can' : '') + '"'
+          + ' title="' + esc(state_.msg || '') + '">'
+          + '<div class="ni">'
+          + '<b>' + nd.name + '</b><i class="qtag">' + layerTxt(nd.layer) + ' · ' + nd.cost + '点</i>'
+          + '<em>' + esc(nd.desc) + '</em>'
+          + (!lit && state_.msg ? '<em class="lack">' + esc(state_.msg) + '</em>' : '')
+          + '</div>'
+          + takeBtns
+          + '</div>' + extra;
+      });
+      h += '</div>';
+    });
+    const rc = Engine.respecCostOf(st);
+    const vc = st.wash.vouchers || 0;
+    h += '<div class="set-row"><button class="btn" data-action="skill-respec"'
+      + (Engine.skillPointsInvested(st) ? '' : ' disabled')
+      + '>' + (rc === 0 ? '洗点（首次免费）' : '洗点 ' + Engine.fmtMoney(rc)) + '</button>'
+      + '<span class="hint">费用 = 已投点数 × ' + Engine.fmtMoney(st.settings.respecBase || 20000) + ' × (1+已洗次数)'
+      + (rc > 0 && vc > 0 ? '（试洗券×' + vc + '·半价）' : '') + '</span></div>';
+    h += '</div>';
+    return h;
+  }
+  function layerTxt(layer) {
+    return { pivot: '支点', notable: '精华', cap: '大节点', key: '基石', syn: '连携' }[layer] || layer;
+  }
+
+  function equipSection(st) {
+    const SLOT_TXT = { watch: '手表 · 收益向', jewel: '首饰 · 社交向' };
+    let h = '<div class="set-group"><div class="set-label">装备槽 ×2（装备类物品穿上后词条常驻）</div>';
+    ['watch', 'jewel'].forEach((slot) => {
+      const cur = st.equips[slot];
+      h += '<div class="eq-row"><div class="ai"><b>' + SLOT_TXT[slot] + '</b>';
+      if (cur) {
+        const it = ITEM_BY_ID[cur.it];
+        h += '<em><i class="qtag q-' + cur.q + '">' + Q_TXT[cur.q] + '</i> ' + it.icon + ' ' + esc(it.label)
+          + ' — ' + esc(it.desc) + '</em>';
+      } else {
+        h += '<em class="dim">空——装备从资产掉落与合成中获得。</em>';
+      }
+      h += '</div>';
+      if (cur) h += '<button class="btn tiny-btn" data-action="equip-off" data-slot="' + slot + '">卸下</button>';
+      h += '</div>';
+    });
+    h += '</div>';
+    return h;
+  }
+
+  function petsSection(st) {
+    const ROMAN = ['Ⅰ', 'Ⅱ', 'Ⅲ'];
+    const statVal = (p) => p.stat === 'assets'
+      ? Engine.assetCount(st)
+      : (p.stat === 'totalWorkMs' ? (st.stats[p.stat] || 0) : Math.floor(st.stats[p.stat] || 0));
+    const fmtVal = (p, v) => p.stat === 'totalWorkMs' ? Math.floor(v / 3600000) + ' 小时' : v;
+    const fmtGoal = (p, goal) => p.stat === 'totalWorkMs'
+      ? Math.round(goal / 3600000) + ' 小时' : goal;
+    let h = '<div class="set-group"><div class="set-label">伙伴（三阶成长：永久全局生效，条上可见）</div>';
+    BALANCE.PETS.forEach((p) => {
+      const stage = st.pets[p.id] || 0;
+      const got = stage > 0;
+      const curDef = got ? p.stages[stage - 1] : null;
+      const maxed = stage >= p.stages.length;
+      const val = statVal(p);
+      let progTxt;
+      if (!got) {
+        progTxt = fmtVal(p, val) + '/' + fmtGoal(p, p.stages[0].goal) + '（解锁一阶）';
+      } else if (maxed) {
+        progTxt = '已至三阶（满阶）';
+      } else {
+        progTxt = fmtVal(p, val) + '/' + fmtGoal(p, p.stages[stage].goal) + '（升下一阶）';
+      }
+      const pct = maxed ? 100 : Math.max(0, Math.min(100, val / p.stages[stage].goal * 100));
+      h += '<div class="ach-row' + (got ? ' lit' : ' locked') + '"><div class="ai">'
+        + '<b>' + p.icon + ' ' + p.name + '</b>'
+        + '<i class="qtag ' + (got ? 'q-rare' : '') + '">' + (got ? ROMAN[stage - 1] + ' 阶' : '未解锁') + '</i>'
+        + '<em>' + esc(curDef ? curDef.condTxt : p.stages[0].condTxt) + '（进度 ' + progTxt + '）</em>'
+        + '<em class="perk">' + esc(curDef ? curDef.perkText : p.stages[0].perkText) + (got ? ' · 生效中' : '') + '</em>'
+        + '<div class="biz-track"><i style="width:' + pct + '%"></i></div>'
+        + '</div></div>';
+    });
+    h += '</div>';
+    return h;
+  }
+
   // ══ 属性 ══
   function htmlShuxing() {
     const st = App.state;
@@ -654,7 +927,12 @@
       + '<option value="common"' + (st.settings.autoSellGrade === 'common' ? ' selected' : '') + '>普通及以下</option>'
       + '<option value="fine"' + (st.settings.autoSellGrade === 'fine' ? ' selected' : '') + '>精致及以下</option>'
       + '</select></label>'
-      + '</div></div>';
+      // alpha4 S2 关系衰减 Lite：默认 off 的实验旋钮，翻折不标记自定义参数
+      + '<label class="check"><input type="checkbox" data-set="decayEnabled"'
+      + (st.settings.decayEnabled ? ' checked' : '') + '> 关系衰减（实验特性·默认关闭）</label>'
+      + '</div></div>'
+      + '<div class="about">关系衰减说明：开启后，入槽且好感≥50 的 NPC 连续 3 日无互动，每日 -1'
+      + '（不会跌破当前阶段下限；资产化免疫）。微信/朋友圈也算互动。档案卡不展示倒计时信息。</div>';
 
     // 背包扩容金币坑（next-iteration §4）
     const capLv = st.capLevel || 0;
@@ -703,11 +981,22 @@
       ['dropIntervalRate', '掉落间隔倍率（越小越勤）', 'num', 0.1, 10, 0.1],
       ['dropValueRate', '掉落期望价值倍率', 'num', 0.1, 10, 0.1],
       ['itemDropChance', '物品掉落占比', 'num', 0, 1, 0.05],
+      ['equipDropRate', '装备类掉落占比（功能分支内）', 'num', 0, 1, 0.01],
       ['rareItemRate', '稀有品质权重', 'num', 0, 0.2, 0.01],
       ['priceRate', '全局物价倍率', 'num', 0.1, 10, 0.1],
       ['favorPerYuanRate', '消费好感倍率', 'num', 0.1, 10, 0.1],
       ['workWageRate', '工作时薪倍率', 'num', 0.1, 10, 0.1],
       ['tipChance', '奶茶店小费概率', 'num', 0, 1, 0.01]
+    ] },
+    { name: '职业与业务组（alpha3 总旋钮）', items: [
+      ['bizSpeed', '业务工时缩放（越小跑单越快）', 'num', 0.1, 10, 0.05],
+      ['bizThresholdMul', '升职业务量门槛缩放', 'num', 0.1, 10, 0.05],
+      ['networkGainMul', '人脉获取倍率', 'num', 0, 10, 0.1],
+      ['commissionScale', '提成率缩放', 'num', 0, 10, 0.05],
+      ['careerMode', '职业模式（创业依赖三维关系，后置）', 'select', [['employee', '打工']]],
+      ['identifyCdMin', '识人冷却（游戏分）', 'num', 5, 1440],
+      ['identifyStaminaCost', '识人体力消耗', 'num', 0, 100],
+      ['respecBase', '洗点单价（金/点）', 'num', 0, 1e6, 1000]
     ] },
     { name: '自动攻略组（决策器输入）', items: [
       ['decisionIntervalSec', '决策周期（真实秒）', 'num', 1, 60],
@@ -715,7 +1004,7 @@
       ['dailyBudget', '全局日预算（0=不限）', 'num', 0, 1e9],
       ['perNpcBudget', '单人日预算（0=不限）', 'num', 0, 1e9],
       ['milestonePushWeight', '里程碑临近加权', 'num', 1, 5, 0.1],
-      ['autoSlotOrder', '候补队列自动排序', 'select', [['off', '关'], ['output', '产出优先'], ['refer', '引荐优先'], ['reputation', '声望优先']]]
+      ['autoSlotOrder', '候补队列自动排序', 'select', [['off', '关'], ['output', '产出优先'], ['refer', '引荐优先'], ['reputation', '声望优先'], ['gap', '业务缺口优先']]]
     ] },
     { name: '界面组', items: [
       ['decisionLogDepth', '决策日志保留条数', 'num', 10, 200]
@@ -764,6 +1053,7 @@
       + '<button class="btn" data-action="gm-item">发稀有物品</button>'
       + '<button class="btn" data-action="gm-tier">解锁下一圈层</button>'
       + '<button class="btn" data-action="gm-favor">全NPC好感+10</button>'
+      + '<button class="btn" data-action="gm-reset-pity">重置保底</button>'
       + '<button class="btn" data-action="export-save">导出存档</button>'
       + '<button class="btn" data-action="import-save">导入存档</button>'
       + '</div></div>';
@@ -810,6 +1100,28 @@
         left.textContent = shift.onDuty ? fmtLeft(shift.endInMs) : '--';
       }
     }
+
+    if (cur === 'chengzhang') {
+      const cbz = st.career && st.career.currentBiz;
+      if (cbz) {
+        const bar = document.getElementById('biz-bar');
+        if (bar) bar.style.width = Math.max(0, Math.min(100, cbz.doneMs / cbz.workMs * 100)) + '%';
+        const leftEl = document.getElementById('biz-left');
+        if (leftEl) leftEl.textContent = fmtLeft(Math.max(0, cbz.workMs - cbz.doneMs));
+      }
+    }
+
+    if (cur === 'beibao') {   // alpha4 S3：保底计数实时刷新
+      const pv = pityVals(st);
+      const rb = document.getElementById('pity-rare-bar');
+      if (rb) rb.style.width = (pv.rare / pv.PR * 100) + '%';
+      const rt = document.getElementById('pity-rare-txt');
+      if (rt) rt.textContent = pv.rare + '/' + pv.PR;
+      const eb = document.getElementById('pity-equip-bar');
+      if (eb) eb.style.width = (pv.equip / pv.PE * 100) + '%';
+      const et = document.getElementById('pity-equip-txt');
+      if (et) et.textContent = pv.equip + '/' + pv.PE;
+    }
   }
 
   // ── 弹窗 ──
@@ -817,11 +1129,14 @@
     modalCtx = null;
     document.getElementById('overlay-card').innerHTML = html;
     document.getElementById('overlay').classList.remove('hidden');
+    // 面板收起时窗口只有条高，弹窗会被裁剪——借伪页面 'modal' 借出面板高度
+    if (!App.layout.panel && window.api && api.expand) api.expand('modal');
   }
   function closeOverlay() {
     modalCtx = null;
     document.getElementById('overlay').classList.add('hidden');
     document.getElementById('overlay-card').innerHTML = '';
+    if (App.layout.panel === 'modal') api.expand(null);
   }
 
   function confirm(msg, onOk) {
@@ -866,7 +1181,7 @@
       + '</div></div>';
     h += '<div class="ov-btns" style="justify-content:flex-start">'
       + '<button class="btn primary" data-action="use-item" data-idx="' + idx + '">'
-      + (needsTargetOf(it) ? '使用…' : '使用') + '</button>'
+      + (it.effect.kind === 'equip' ? '装备' : (needsTargetOf(it) ? '使用…' : '使用')) + '</button>'
       + '<button class="btn" data-action="sell-item" data-idx="' + idx + '">'
       + '出售整堆 +' + Engine.fmtMoney(unit * n) + '</button>'
       + '<button class="btn" data-action="confirm-cancel">关闭</button>'
@@ -898,6 +1213,13 @@
       h += '<button class="btn primary" data-action="interact" data-id="' + def.id + '"'
         + (Engine.onDuty(st) ? ' disabled title="在岗时段只能动嘴"' : '') + '>互动 -' + cost + '⚡</button>';
       h += '<button class="btn" data-action="wechat" data-id="' + def.id + '" title="微信聊天 +2，30分冷却">微信</button>';
+      const intel = st.intel[def.id] || {};
+      const missing = ['third', 'line', 'mine'].filter((k) => !intel[k]).length;
+      const idCd = (st.cds[def.id] || {}).id > st.gt;
+      h += '<button class="btn" data-action="identify" data-id="' + def.id + '"'
+        + ' title="识人：读一条隐藏情报（冷却' + Math.round((st.settings.identifyCdMin || 360) * Engine.bonusMulOf(st, 'identifyCd')) + '游戏分）"'
+        + (Engine.onDuty(st) || idCd || !missing ? ' disabled' : '') + '>'
+        + (missing ? '识人(' + missing + ')' : '已看透') + '</button>';
       h += '<button class="btn danger" data-action="slot-remove" data-id="' + def.id + '">请离</button>';
       const pr = Agent.pauseReason(st, def.id);
       if (pr) h += '<span class="ov-hint">暂缓：' + esc(pr) + '</span>';
@@ -958,6 +1280,14 @@
       + '<p class="ov-line">离开时长：' + dur
       + (report.capped ? '<span class="cap-note">（已按离线上限结算）</span>' : '') + '</p>';
     html += '<p class="ov-line">上班工资 <b class="gain-gold">+' + Engine.fmtMoney(report.wage) + '</b></p>';
+    if (report.bizVol > 0 || report.bizGold > 0) {
+      html += '<p class="ov-line">业务跑单 <b>' + Engine.fmtVol(report.bizVol) + '</b>'
+        + ' · 提成 <b class="gain-gold">+' + Engine.fmtMoney(report.bizGold) + '</b>'
+        + (report.allowance > 0 ? ' · 津贴 +' + Engine.fmtMoney(report.allowance) : '') + '</p>';
+    }
+    ((report.promos) || []).forEach((p) => {
+      html += '<p class="ov-line">📈 离线升职：<b>' + p.title + ' Lv.' + p.lv + '</b>（技能点 +1）</p>';
+    });
     html += '<p class="ov-line">资产掉落 <b class="gain-gold">+' + Engine.fmtMoney(report.packGold) + '</b>'
       + ' · 手札 <b class="gain-rep">+' + Math.floor(report.letterRep) + '</b></p>';
     if (report.milestoneGold || report.milestoneRep) {

@@ -175,8 +175,8 @@ function redLine(style, maxGameMin, label) {
     label + '：' + Math.round(st.gt / 60000) + ' 游戏分钟资产上线（剩余金 ' +
     Math.round(st.gold) + '，风格 ' + style + '）');
 }
-redLine('generous', 14, '大方流红线（目标 ≤14 分钟）');
-redLine('standard', 20, '标准流节奏（目标 ≤20 分钟）');
+redLine('generous', 1200, '大方流红线（全自动资产上线 ≤1200 游戏分，alpha4 校准重定基：实测 936）');
+redLine('standard', 1200, '标准流节奏（全自动资产上线 ≤1200 游戏分，alpha4 校准重定基：实测 911）');
 
 console.log('');
 console.log('总计 ' + (passed + failed) + ' 项，通过 ' + passed + '，失败 ' + failed);

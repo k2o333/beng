@@ -504,26 +504,10 @@ body[data-wr="tiny"] .stam-line { display: contents; }
 body[data-wr="tiny"] #hud-stam { grid-row: 1; grid-column: 2; text-align: right; }
 body[data-wr="tiny"] .stam-track { grid-row: 2; grid-column: 1 / span 2; width: 100%; min-width: 72px; }
 
-/* ── tiny：六页签收进「☰」像素小菜单 ── */
+/* ── tiny：六页签收进「☰」原生弹出菜单 ── */
 #act-more { min-width: 34px; padding: 6px 9px; font-size: 14px; line-height: 1; }
 body:not([data-wr="tiny"]) #act-more { display: none !important; }
 body[data-wr="tiny"] #actions > button[data-panel] { display: none; }
-#act-menu {
-  position: absolute;
-  left: 10px;
-  bottom: calc(100% + 8px);
-  z-index: 46;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 84px;
-  padding: 6px;
-  background: var(--panel);
-  border: 2px solid var(--line);
-}
-body[data-side="left"] #act-menu { left: calc(100% + 8px); bottom: 8px; }
-body[data-side="right"] #act-menu { left: auto; right: calc(100% + 8px); bottom: 8px; }
-#act-menu button { min-width: 0; padding: 5px 12px; text-align: left; }
 
 /* ── 舞台窄条滚动：边缘渐隐 + 步进箭头 ── */
 .fade {
@@ -580,35 +564,6 @@ body[data-side="right"] #act-menu { left: auto; right: calc(100% + 8px); bottom:
 #tip .tip-fav { color: var(--gold); }
 
 /* ── 右键菜单：宽度四档勾选 + 重置位置 ── */
-#ctx-menu {
-  position: fixed;
-  z-index: 61;
-  min-width: 136px;
-  padding: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  background: var(--panel);
-  border: 2px solid var(--line);
-}
-.ctx-title { font-size: 11px; color: var(--dim); padding: 1px 4px 4px; }
-.ctx-item {
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--ink);
-  background: #101019;
-  border: 1px solid var(--line);
-  padding: 5px 10px;
-  text-align: left;
-  cursor: pointer;
-  display: flex;
-  justify-content: space-between;
-}
-.ctx-item:hover { border-color: var(--tier, #5b6b8c); color: #fff; }
-.ctx-item.cur { border-color: var(--gold); color: var(--gold); }
-.ctx-item.cur::after { content: '✓'; }
-.ctx-sep { height: 1px; background: var(--line); margin: 4px 0; }
-
 /* ── toast 随吸附边翻转 ── */
 body[data-side="top"] #toast { top: calc(var(--barh) + 14px); bottom: auto; }
 body[data-side="left"] #toast { right: calc(var(--vthick) + 14px); bottom: 14px; }
@@ -698,3 +653,55 @@ body[data-side="right"] #toast { left: calc(var(--vthick) + 14px); right: auto; 
 .ach-row em { display: block; font-style: normal; font-size: 12px; color: var(--dim); margin-top: 2px; }
 .ach-row em.perk { color: #ffe9a8; }
 .ach-row em.flavor { color: #565b72; }
+
+
+/* ── alpha3：成长页（职业业务/天赋网/装备/宠物）── */
+.dim-lv { color: var(--dim); font-weight: normal; margin-left: 6px; }
+.biz-track {
+  height: 8px; background: #000a; border: 1px solid var(--line);
+  margin: 6px 0 4px; overflow: hidden;
+}
+.biz-track i { display: block; height: 100%; background: #5ac8b0; transition: width .4s; }
+.biz-card { border: 2px solid #3a5a52; background: #12181c; padding: 8px 10px; margin-bottom: 8px; }
+.net-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.net-chip {
+  padding: 3px 8px; border: 1px solid var(--line); background: #14151f;
+  font-size: 12px; color: var(--fg, #d8dce8);
+}
+.net-chip.total { border-color: #e8c46a; color: #ffe9a8; }
+.ok-eff { color: #7adec6 !important; }
+
+/* ── alpha4 S3：掉落保底进度条（背包页）── */
+.pity-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.pity-label { flex: 0 0 60px; font-size: 12px; color: var(--dim); }
+.pity-row .biz-track { flex: 1; margin: 0; }
+.pity-txt { font-size: 12px; min-width: 70px; text-align: right; }
+.pity-hint { font-size: 12px; color: var(--dim); margin-top: 4px; }
+
+.skill-branch { margin: 8px 0 12px; }
+.branch-name { font-size: 13px; color: #ffe9a8; margin-bottom: 4px; }
+.node-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; margin-bottom: 4px;
+  border: 1px solid var(--line); background: #14151f; opacity: 0.66;
+}
+.node-row.can { opacity: 1; border-color: #4a6a5e; cursor: pointer; }
+.node-row.lit { opacity: 1; border-color: #e8c46a; background: #191712; }
+.node-row.cap { border-left-width: 4px; }
+.node-row.key { border-left-width: 4px; border-left-color: #b04a5a; }
+.node-row.syn { border-left-width: 4px; border-left-color: #5a78b8; }
+.node-row .ni { flex: 1; min-width: 0; }
+.node-row b { margin-right: 6px; }
+.node-row em { display: block; font-style: normal; font-size: 12px; color: var(--dim); margin-top: 1px; }
+.tiny-btn { padding: 3px 8px; font-size: 12px; }
+.choice-row { display: flex; gap: 6px; padding: 0 8px 6px; }
+.eq-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; margin-bottom: 6px;
+  border: 2px solid var(--line); background: #14151f;
+}
+.eq-row .ai { flex: 1; min-width: 0; }
+.eq-row em { display: block; font-style: normal; font-size: 12px; color: var(--dim); margin-top: 2px; }
+
+/* alpha4 Wave3：成长页行业景气 / 风险单角标（复用 qtag/ref-badge，仅补间距与低谷配色） */
+.attr-name .ref-badge, .attr-name .qtag { margin-left: 6px; vertical-align: 1px; }

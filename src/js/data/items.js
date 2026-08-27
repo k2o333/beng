@@ -13,6 +13,8 @@
 //   favor_all      全部槽内 NPC +favor
 //   send_gift      等效礼物送出（size 档位，免费，可攒）（send 类）
 //   unlock_next    解锁一名未结识的上一层 NPC
+//   equip          装备类（alpha3/05）：slot=watch 手表(收益向)|jewel 首饰(社交向)，
+//                  entries 按品质放大（fine×1.5 / rare×2）后常驻注册进 bonuses
 const SRC_BASE = '资产掉落 · NPC回礼 · 合成';
 globalThis.ITEMS = [
   { id: 'milk_tea_coupon', label: '心动奶茶券', quality: 'common', icon: '🧋', sell: 20,
@@ -50,7 +52,16 @@ globalThis.ITEMS = [
     effect: { kind: 'unlock_next' }, desc: '解锁一名未结识的上一层 NPC' },
   { id: 'limited_collectible', label: '限量藏品', quality: 'rare', icon: '💎', sell: 1500,
     src: SRC_BASE,
-    effect: { kind: 'send_gift', size: 'large' }, desc: '等效大礼的礼物，送出带专属文案' }
+    effect: { kind: 'send_gift', size: 'large' }, desc: '等效大礼的礼物，送出带专属文案' },
+  // ── 装备类（alpha3/05）：词条为 common 基准，按掉落品质 ×1.5 / ×2 放大 ──
+  { id: 'watch_steel', label: '精钢腕表', quality: 'common', icon: '⌚', sell: 600,
+    src: SRC_BASE,
+    effect: { kind: 'equip', slot: 'watch', entries: [{ attr: 'wageMul', kind: 'add', value: 0.06 }] },
+    desc: '装备【手表】槽：时薪 +6%（收益向）' },
+  { id: 'jewel_jade', label: '青玉平安扣', quality: 'common', icon: '📿', sell: 600,
+    src: SRC_BASE,
+    effect: { kind: 'equip', slot: 'jewel', entries: [{ attr: 'favorMul', kind: 'add', value: 0.05 }] },
+    desc: '装备【首饰】槽：全局好感 +5%（社交向）' }
 ];
 
 globalThis.ITEM_BY_ID = {};

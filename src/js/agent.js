@@ -65,7 +65,7 @@
   // ── L1 阶段白名单 ──
   // 免费动作始终可用；付费按阶段解锁。风格调制：frugal 只留免费+小礼；generous/lavish 跳阶段门。
   function whitelist(stageKey, style) {
-    const free = ['interact', 'wechat', 'moments', 'workplace'];
+    const free = ['interact', 'wechat', 'moments', 'workplace', 'identify'];
     if (style === 'frugal') return new Set(free.concat(['gift:small']));
     const paidByStage = {
       ice: [],
@@ -130,6 +130,16 @@
       }
       if (cdReady(state, id, 'mo')) {
         out.push(mk('moments', def, { gain: B.MOMENTS_FAVOR, stamina: 0 }, '朋友圈点赞'));
+      }
+      // 识人（alpha3/04）：情报没读全时的免费动作，优先级低于常规社交
+      if (!duty && wl.has('identify') && cdReady(state, id, 'id')
+        && stamOk(S.identifyStaminaCost || 12)) {
+        const intel = state.intel[id] || {};
+        const missing = ['third', 'line', 'mine'].filter((k) => !intel[k]);
+        if (missing.length) {
+          out.push({ act: 'identify', id, gain: 0, cost: 0, stamina: S.identifyStaminaCost || 12,
+            reason: '识人·摸底（缺' + missing.length + '条情报）', _score: 0.6 });
+        }
       }
 
       // 物品动作（免费池：不占预算；每件物品只生成一次候选）
@@ -261,19 +271,46 @@
   }
 
   // ── 自动补位（03 §3）：满级转资产后候补队列顶上，不花槽位费 ──
+  // alpha3：mode='gap' 按业务缺口排序——优先补当前行业模板最缺 domain 的人脉（02-network 用法二）
   function outputScore(state, def) {
     return B.BASE_OUTPUT[def.type] * (B.TIERS[def.tier - 1].mult) * def.coef;
+  }
+  function biggestNetGap(state) {
+    if (!globalThis.Engine || !globalThis.Engine.networkOf) return null;
+    const net = globalThis.Engine.networkOf(state);
+    let dom = null, gap = 0;
+    for (const tpl of B.BIZ_TEMPLATES) {
+      if (!globalThis.Engine.bizTemplateOpen(state, tpl)) continue;
+      for (const d in tpl.reqNet) {
+        const g = tpl.reqNet[d] - (net[d] || 0);
+        if (g > gap) { gap = g; dom = d; }
+      }
+    }
+    return dom;
   }
   function refillQueue(state) {
     const mode = state.settings.autoSlotOrder;
     if (!mode || mode === 'off') return false;
+    const cap = (globalThis.Engine && globalThis.Engine.slotCapOf)
+      ? globalThis.Engine.slotCapOf(state) : state.slotCount;   // 广撒网/深耕 调整后的槽位
     let filled = false;
-    while (state.slots.length < state.slotCount) {
+    while (state.slots.length < cap) {
       const cands = globalThis.NPCS.filter((def) => statusOf(state, def) === 'available'
         && state.slots.indexOf(def.id) < 0);
       if (!cands.length) break;
       if (mode === 'refer') cands.sort((a, b2) => (!!b2.refer - !!a.refer) || outputScore(0, b2) - outputScore(0, a));
       else if (mode === 'reputation') cands.sort((a, b2) => (b2.type === 'rep' ? 1 : 0) - (a.type === 'rep' ? 1 : 0) || outputScore(0, b2) - outputScore(0, a));
+      else if (mode === 'gap') {
+        const dom = biggestNetGap(state);
+        // S1 景气质押：景气行业候选稳定前置（Engine 缺席/旋钮关时退化为 0，行为与旧版一致）
+        const hot = {};
+        if (state.settings.boomEnabled && globalThis.Engine && globalThis.Engine.boomOf) {
+          B.DOMAINS.forEach((d) => { hot[d] = globalThis.Engine.boomOf(state, d) === 'boom' ? 1 : 0; });
+        }
+        cands.sort((a, b2) => ((hot[b2.domain] || 0) - (hot[a.domain] || 0))
+          || (dom ? ((b2.domain === dom) - (a.domain === dom)) : 0)
+          || outputScore(0, b2) - outputScore(0, a));
+      }
       else cands.sort((a, b2) => outputScore(0, b2) - outputScore(0, a));   // output
       state.slots.push(cands[0].id);
       filled = true;

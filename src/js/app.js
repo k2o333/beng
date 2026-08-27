@@ -95,7 +95,8 @@
     if (report && report.awayMs > 60000
       && (report.capped || report.wage >= 1 || report.packGold >= 1 || report.letterRep >= 1
         || report.milestoneGold >= 1 || (report.favors || []).some((f) => f.gained >= 0.05)
-        || (report.package || []).length)) {
+        || (report.package || []).length
+        || report.bizGold >= 1 || report.bizVol > 0 || (report.promos || []).length)) {
       UIPanel.showOffline(report);
     }
 
@@ -205,6 +206,26 @@
   }
   function logTxt(txt) { Engine.logPush(App.state, txt); }
 
+  // S7 预设确认弹窗用：模拟沿序点亮，累计可负担前缀的点数消耗
+  function presetCostOf(st, key) {
+    const p = BALANCE.SKILL_PRESETS[key];
+    if (!p) return 0;
+    const sim = Object.assign({}, st, {
+      skills: { points: st.skills.points, nodes: Object.assign({}, st.skills.nodes), washed: st.skills.washed }
+    });
+    let cost = 0;
+    p.nodes.forEach((id) => {
+      const nd = BALANCE.SKILLS.nodes[id];
+      if (!nd) return;
+      if (Engine.skillNodeState(sim, id).st === 'can') {
+        cost += nd.cost;
+        sim.skills.points -= nd.cost;
+        sim.skills.nodes[id] = nd.choice ? nd.choice[0] : true;
+      }
+    });
+    return cost;
+  }
+
   function updateBudgetHud() { /* 预算在攻略页动态位里刷新，HUD 保持四行 */ }
 
   // ── 操作分发 ──
@@ -235,6 +256,7 @@
           if (!st.seen.hint) st.seen.hint = 1;
           const def = NPC_BY_ID[id];
           App.notify(TEXTS.meet[id] || ('你结识了 ' + def.name + '。'), 4500);
+          App.eventFx(r.events || []);
         } else App.notify(r.msg || '暂时无法入槽', 2000);
         commit();
         break;
@@ -256,6 +278,10 @@
       case 'wechat': fxResult(Engine.wechat(st, id)); commit(); break;
       case 'moments': fxResult(Engine.moments(st, id)); commit(); break;
       case 'workplace': fxResult(Engine.workplace(st, id, Date.now())); commit(); break;
+      case 'identify':
+        fxResult(Engine.identify(st, id, Date.now(), Math.random));
+        commit();
+        break;
       case 'gift': {
         const r = Engine.spendGift(st, id, ds.size, Date.now());
         if (r.ok) {
@@ -368,6 +394,72 @@
         commit();
         break;
       }
+      // ── alpha3：成长页动作 ──
+      case 'biz-industry': {
+        st.career.industry = ds.d;
+        if (st.career.currentBiz && !Engine.bizTemplateOpen(st,
+          BALANCE.BIZ_TEMPLATES.find((t) => t.id === st.career.currentBiz.tplId))) {
+          st.career.currentBiz = null;   // 行业切换后由心跳自动接单
+        }
+        App.notify('行业方向：' + BALANCE.DOMAIN_TXT[ds.d], 1800);
+        commit();
+        break;
+      }
+      case 'biz-pick': {
+        const r = Engine.startBiz(st, ds.tpl, Math.random);   // rng：风险单开工掷 jit（S6）
+        if (!r.ok) App.notify(r.msg, 2200);
+        commit();
+        break;
+      }
+      case 'skill-take': {
+        const r = Engine.takeSkill(st, ds.node, ds.c);
+        if (r.ok) App.eventFx(r.events || []);
+        else App.notify(r.msg || '暂不可点亮', 2200);
+        commit();
+        break;
+      }
+      case 'skill-choice': {
+        // S8 choice 泛化：节点切换存档键（替代 s14 硬编码），校验合法键防篡改
+        const nid = ds.node;
+        const nd = BALANCE.SKILLS.nodes[nid];
+        if (nid && nd && st.skills.nodes[nid] && Array.isArray(nd.choice) && nd.choice.indexOf(ds.c) >= 0) {
+          st.skills.nodes[nid] = ds.c; Engine.invalidateBonuses(st);
+        }
+        commit();
+        break;
+      }
+      case 'skill-preset': {
+        // alpha4 S7 Build 预设：确认弹窗公示可负担前缀消耗，应用后汇报摘要
+        const p = BALANCE.SKILL_PRESETS[ds.id];
+        if (!p) break;
+        const cost = presetCostOf(st, ds.id);
+        UIPanel.confirm('「' + p.name + '」将消耗 ' + cost + ' 技能点'
+          + '（已点亮/门槛不足的节点自动跳过）。确定？', function () {
+          const r = Engine.applyBuildPreset(st, ds.id);
+          if (r.ok) {
+            App.notify('预设「' + r.name + '」：点亮 ' + r.lit.length + ' 个节点'
+              + (r.skipped.length ? '，跳过 ' + r.skipped.length + ' 个' : ''), 3600);
+          } else App.notify(r.msg || '预设不可用', 2200);
+          commit();
+        });
+        break;
+      }
+      case 'skill-respec': {
+        UIPanel.confirm('洗点会返还全部已投技能点，已点基石与强化全部清空。确定？', function () {
+          const r = Engine.respecSkills(st);
+          App.notify(r.ok ? '洗点完成，返还 ' + r.refund + ' 点' : r.msg, r.ok ? 2400 : 2400);
+          if (r.ok) App.eventFx(r.events || []);
+          commit();
+        });
+        break;
+      }
+      case 'equip-off': {
+        const r = Engine.unequipEquip(st, ds.slot);
+        if (r.ok) App.eventFx(r.events || []);
+        else App.notify(r.msg, 2000);
+        commit();
+        break;
+      }
       case 'invite-accept': {
         const r = Engine.acceptInvite(st, id);
         if (r.ok) {
@@ -398,6 +490,7 @@
       case 'gm-item': App.notify(Engine.gmGrant(st, 'item').msg, 1800); commit(); break;
       case 'gm-tier': Engine.gmUnlockTier(st); document.body.dataset.tier = st.tier; App.notify('圈层+1', 1400); commit(); break;
       case 'gm-favor': Engine.gmAllFavor(st, 10); App.notify('全 NPC 好感 +10', 1400); commit(); break;
+      case 'gm-reset-pity': Engine.gmResetPity(st); App.notify('保底计数已清零', 1400); commit(); break;
       case 'export-save': UIPanel.showExport(); break;
       case 'import-save': UIPanel.showImport(); break;
       case 'import-apply': UIPanel.applyImport(); break;
@@ -547,7 +640,63 @@
           if (names && allowNotify()) App.notify('今日热点：' + names, 4000);
           break;
         }
+        // ── alpha4 Wave3 事件特效 ──
+        case 'boom': {   // S1 周切景气：如「本周景气：金融↑ 地产— 科技↓」
+          if (allowNotify()) App.notify(e.txt || '本周景气轮换', 5000);
+          break;
+        }
+        case 'voucher': {   // S7 试洗券：圈层首通发放
+          const wc = fxCtr(72);
+          Fx.add('试洗券 +1（下次洗点半价）', wc[0], wc[1], '#d8dce8', true);
+          if (allowNotify()) App.notify('获得试洗券（下次洗点半价）', 4200);
+          break;
+        }
         case 'wage':
+          break;
+        // ── alpha3 事件特效 ──
+        case 'biz': {
+          const bc = fxCtr(56);
+          Fx.add('+' + Engine.fmtVol(e.vol || 0) + ' 业务' + (e.gold ? ' · +' + Engine.fmtMoney(e.gold) : ''), bc[0], bc[1], '#ffd76a');
+          if (allowNotify() && e.allowance > 0) App.notify('职级津贴 +' + Engine.fmtMoney(e.allowance), 2400);
+          break;
+        }
+        case 'promo': {
+          const pc = fxCtr(84);
+          Fx.add('📈 升职！' + e.title + '（技能点+1）', pc[0], pc[1], '#ffe9a8', true);
+          if (allowNotify()) App.notify('升职为「' + e.title + '」：提成率与津贴上调，获得 1 技能点', 6000);
+          break;
+        }
+        case 'sp': {
+          const sc = fxCtr(96);
+          Fx.add('圈层首通 · 技能点+1', sc[0], sc[1], '#9fe8c8', true);
+          break;
+        }
+        case 'skill': {
+          const kc = fxCtr(92);
+          Fx.add('天赋点亮：' + e.name, kc[0], kc[1], '#7adec6', true);
+          break;
+        }
+        case 'respec': {
+          const rc = fxCtr(88);
+          Fx.add('洗点完成，返还 ' + e.refund + ' 点', rc[0], rc[1], '#d8dce8', true);
+          break;
+        }
+        case 'pet': {
+          const pd = BALANCE.PETS.find((p) => p.id === e.id);   // 引擎 pet 事件不带 icon，UI 侧按 id 补
+          const ROMAN = ['', 'Ⅰ', 'Ⅱ', 'Ⅲ'];
+          const stage = e.stage || 1;
+          const tc = fxCtr(90);
+          if (stage > 1) {   // alpha4 S4：升阶文案
+            Fx.add((pd ? pd.icon + ' ' : '') + e.name + ' 升至 ' + ROMAN[stage] + ' 阶！', tc[0], tc[1], '#ffe9a8', true);
+            if (allowNotify()) App.notify(e.name + ' 升至 ' + ROMAN[stage] + ' 阶：' + e.perkText, 5200);
+          } else {
+            Fx.add((pd ? pd.icon + ' ' : '') + e.name + ' 加入！', tc[0], tc[1], '#ffe9a8', true);
+            if (allowNotify()) App.notify(e.name + ' 解锁（Ⅰ 阶）：' + e.perkText, 5200);
+          }
+          break;
+        }
+        case 'equipOn':
+        case 'equipOff':
           break;
       }
     });
@@ -563,7 +712,10 @@
   // ── 存档 / 通知 ──
   function save() {
     if (!App.state) return;
-    try { api.writeSave(JSON.stringify(App.state)); } catch (e) { /* 忽略 */ }
+    try {
+      delete App.state._bCache; delete App.state._bSig;   // 聚合缓存不入档（存档契约 v3）
+      api.writeSave(JSON.stringify(App.state));
+    } catch (e) { /* 忽略 */ }
   }
 
   function refreshPanel() {

@@ -4,7 +4,7 @@
 (function () {
   let canvas, ctx, wrap, barEl;
   let fadeL, fadeR, btnPrev, btnNext;
-  let grabberEl, actMore, actMenu, ctxMenu;
+  let grabberEl, actMore;
   let stageW = 0, stageH = 0;
   let meX = 0;                       // 主角当前显示 x（缓动）
   const dropFx = new Map();          // uid -> 视觉状态
@@ -71,16 +71,7 @@
     canvas.addEventListener('mousemove', onStageMove);
     canvas.addEventListener('mouseleave', onStageLeave);
 
-    // 点空白收起小菜单（捕获阶段，先于菜单自身 click）
-    document.addEventListener('mousedown', (e) => {
-      if (ctxMenu && !ctxMenu.classList.contains('hidden') && !ctxMenu.contains(e.target)) {
-        closeCtxMenu();
-      }
-      if (actMenu && !actMenu.classList.contains('hidden')
-        && !actMenu.contains(e.target) && e.target !== actMore) {
-        hideActMenu();
-      }
-    }, true);
+    // 原生菜单自带点外关闭，DOM 收起逻辑仅保留兜底
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideMenus(); });
 
     // 自留一份布局回调：记录 side/wRatio 并刷新分档 class
@@ -96,25 +87,47 @@
     requestAnimationFrame(loop);
   }
 
-  // ── tiny 页签收纳：「☰」弹像素小菜单，沿用 data-panel ──
+  // ── tiny 页签收纳：「☰」原生弹出菜单（条窗装不下 DOM 菜单），沿用 data-panel 清单 ──
   function bindActMenu() {
     actMore = document.getElementById('act-more');
-    actMenu = document.getElementById('act-menu');
-    if (!actMore || !actMenu) return;
+    if (!actMore) return;
     actMore.addEventListener('click', (e) => {
       e.stopPropagation();
-      actMenu.classList.toggle('hidden');
-    });
-    actMenu.addEventListener('click', (e) => {
-      const btn = e.target.closest('button[data-panel]');
-      if (!btn) return;
-      actMenu.classList.add('hidden');
-      App.togglePanel(btn.dataset.panel);
+      const pages = Array.prototype.map.call(
+        document.querySelectorAll('#actions > button[data-panel]'),
+        (b) => ({ label: b.textContent.trim(), value: b.dataset.panel })
+      );
+      const r = callApi('nativeMenu', { items: pages });
+      if (r && typeof r.then === 'function') r.then((v) => { if (v) App.togglePanel(v); });
     });
   }
-  function hideActMenu() { if (actMenu) actMenu.classList.add('hidden'); }
-  function closeCtxMenu() { if (ctxMenu) ctxMenu.classList.add('hidden'); }
-  function hideMenus() { hideActMenu(); closeCtxMenu(); }
+  function hideActMenu() { /* 原生菜单自带点外关闭 */ }
+  function hideMenus() { hideActMenu(); }
+
+  // ── 右键 #bar：宽度四档勾选 + 重置位置（原生菜单，可在窗外渲染）──
+  function bindCtxMenu() {
+    if (!barEl) return;
+    barEl.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      clearTipTimer();
+      if (window.Tip) window.Tip.hide();
+      const near = (v) => Math.abs(barWRatio - v) < 0.03;
+      const items = [
+        { label: '1/5 宽', value: 0.2, checked: near(0.2) },
+        { label: '1/3 宽', value: 1 / 3, checked: near(1 / 3) },
+        { label: '1/2 宽', value: 0.5, checked: near(0.5) },
+        { label: '全宽', value: 1, checked: near(1) },
+        { sep: true },
+        { label: '重置位置', value: 'reset', radio: false }
+      ];
+      const r = callApi('nativeMenu', { items });
+      if (r && typeof r.then === 'function') r.then((v) => {
+        if (v === null || v === undefined) return;
+        if (v === 'reset') callApi('resetBarLayout');
+        else if (isFinite(Number(v))) callApi('setBarLayout', { barWRatio: Number(v) });
+      });
+    });
+  }
 
   // ── 舞台窄条滚动：滚轮纵→横、边缘箭头步进 ──
   function bindStageScroll() {
@@ -193,39 +206,6 @@
     try {
       api.setBarLayout({ barWRatio: WR_PRESETS[(idx + 1) % WR_PRESETS.length] }).catch(() => {});
     } catch (e) { /* 忽略 */ }
-  }
-
-  // ── 右键 #bar：宽度四档勾选 + 重置位置 ──
-  function bindCtxMenu() {
-    ctxMenu = document.getElementById('ctx-menu');
-    if (!ctxMenu || !barEl) return;
-    barEl.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      clearTipTimer();
-      if (window.Tip) window.Tip.hide();
-      openCtxMenu(e.clientX, e.clientY);
-    });
-    ctxMenu.addEventListener('click', (e) => {
-      const item = e.target.closest('[data-wrp],[data-role]');
-      if (!item) return;
-      closeCtxMenu();
-      if (item.dataset.wrp !== undefined) {
-        const v = Number(item.dataset.wrp);
-        if (isFinite(v)) callApi('setBarLayout', { barWRatio: v });
-      } else if (item.dataset.role === 'reset') {
-        callApi('resetBarLayout');
-      }
-    });
-  }
-  function openCtxMenu(x, y) {
-    if (!ctxMenu) return;
-    ctxMenu.querySelectorAll('[data-wrp]').forEach((it) => {
-      it.classList.toggle('cur', Math.abs(Number(it.dataset.wrp) - barWRatio) < 0.03);
-    });
-    ctxMenu.classList.remove('hidden');
-    const w = ctxMenu.offsetWidth || 140, h = ctxMenu.offsetHeight || 160;
-    ctxMenu.style.left = Math.min(Math.max(4, x), window.innerWidth - w - 4) + 'px';
-    ctxMenu.style.top = Math.min(Math.max(4, y), window.innerHeight - h - 4) + 'px';
   }
 
   // ── NPC 悬停 tooltip：全局轻量 div，跟随鼠标 + 视口翻转 ──
@@ -353,6 +333,7 @@
     layout();
     drawBg();
     drawMe();
+    drawPets();
     const slots = st.slots;
     for (let i = 0; i < slots.length; i++) {
       const def = NPC_BY_ID[slots[i]];
@@ -451,9 +432,15 @@
   }
 
   // ── 掉落物（07 §3）：落地弹跳两次，3s 后自动入包或点击暴击 ──
+  // alpha3：稀有品质光效 + 播报（longterm-optimization #2 同点实装）
   function spawnDrop(e) {
     const x = UIBar.npcStageX(e.id);
-    dropFx.set(e.uid, { x, born: performance.now(), icon: iconOf(e) });
+    const rare = e.kind === 'item' && e.q === 'rare';
+    dropFx.set(e.uid, { x, born: performance.now(), icon: iconOf(e), rare });
+    if (rare) {
+      const it = ITEM_BY_ID[e.itemId];
+      if (window.App && App.notify) App.notify('✨ 稀有掉落：' + (it ? it.label : '神秘物品') + '！手快点它', 5000);
+    }
     if (dropFx.size > 24) {   // 防堆积
       const first = dropFx.keys().next().value;
       dropFx.delete(first);
@@ -479,10 +466,48 @@
           : bt < 0.7 ? Math.sin((bt - 0.35) / 0.35 * Math.PI) * 5 : 0;
         y = gy - 16 - hop;
       }
+      if (fx.rare) {   // 稀有光效：金色脉冲光环
+        const pulse = 0.5 + 0.5 * Math.sin(now / 180);
+        ctx.strokeStyle = 'rgba(232,196,106,' + (0.35 + 0.45 * pulse).toFixed(3) + ')';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(fx.x, y - fsz(6), fsz(11) + pulse * 3, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       ctx.font = fsz(13) + 'px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(fx.icon, fx.x, y);
     }
+  }
+
+  // ── 宠物跟随（alpha3/06 可见收集层）：已解锁伙伴贴着主角小碎步 ──
+  // alpha4 S4：阶段徽标（罗马数字悬于头顶）+ 图标随阶段放大 ×1/×1.15/×1.3
+  const PET_STAGE_TXT = { 1: 'Ⅰ', 2: 'Ⅱ', 3: 'Ⅲ' };
+  const PET_STAGE_SCALE = { 1: 1, 2: 1.15, 3: 1.3 };
+  function drawPets() {
+    const st = App.state;
+    if (!st || !st.pets) return;
+    const ids = Object.keys(st.pets).sort();
+    if (!ids.length) return;
+    const now = performance.now();
+    ids.forEach((pid, i) => {
+      const def = BALANCE.PETS.find((p) => p.id === pid);
+      if (!def) return;
+      const stage = st.pets[pid] || 1;
+      const p = px();
+      const gy = groundY();
+      const bob = Math.sin(now / 260 + i * 2.1) * 2 * (p / 3);
+      // 主角身后一列排开，随主角缓动位置偏移
+      const x = Math.max(8, meX - 20 * p + i * 14 * (p / 3));
+      const prevFill = ctx.fillStyle;
+      ctx.font = fsz(Math.round(10 * (PET_STAGE_SCALE[stage] || 1))) + 'px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(def.icon, x, gy - 4 + bob);
+      ctx.font = 'bold ' + fsz(7) + "px 'Microsoft YaHei', sans-serif";
+      ctx.fillStyle = '#ffe9a8';
+      ctx.fillText(PET_STAGE_TXT[stage] || 'Ⅰ', x, gy - 16 + bob);
+      ctx.fillStyle = prevFill;
+    });
   }
 
   function drawBadge() {

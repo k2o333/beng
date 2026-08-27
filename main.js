@@ -316,6 +316,30 @@ function boot() {
   ipcMain.handle('bar:drag', (e, phase) => barDrag(phase));
   ipcMain.handle('bar:resize', (e, p) => barResize(p));
 
+  // 原生弹出菜单：条窗高度装不下 DOM 菜单（右键宽度档 / tiny 页签收纳）。
+  // spec={items:[{label,value,checked,radio,sep}]}；返回被点项 value，点外关闭返回 null。
+  ipcMain.handle('bar:nativemenu', (e, spec) => {
+    const items = spec && Array.isArray(spec.items) ? spec.items : [];
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (v) => { if (!settled) { settled = true; resolve(v === undefined ? null : v); } };
+      const tpl = [];
+      items.forEach((it) => {
+        if (it.sep) { tpl.push({ type: 'separator' }); return; }
+        tpl.push({
+          label: String(it.label || ''),
+          type: it.radio === false ? 'normal' : 'radio',
+          checked: !!it.checked,
+          click: () => done(it.value)
+        });
+      });
+      Menu.buildFromTemplate(tpl).popup({
+        window: win,
+        callback: () => setTimeout(() => done(null), 0)
+      });
+    });
+  });
+
   ipcMain.handle('save:write', (e, text) => {
     const p = savePath();
     const tmp = p + '.tmp';

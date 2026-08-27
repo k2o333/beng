@@ -41,18 +41,11 @@
       <button data-panel="gonglue">攻略</button>
       <button data-panel="beibao">背包</button>
       <button data-panel="gongzuo">工作</button>
+      <button data-panel="chengzhang">成长</button>
       <button data-panel="shuxing">属性</button>
       <button data-panel="quanceng">圈层</button>
       <button data-panel="shezhi">设置</button>
-      <!-- tiny 档收纳菜单（绝对定位，点外关闭） -->
-      <div id="act-menu" class="hidden">
-        <button data-panel="gonglue">攻略</button>
-        <button data-panel="beibao">背包</button>
-        <button data-panel="gongzuo">工作</button>
-        <button data-panel="shuxing">属性</button>
-        <button data-panel="quanceng">圈层</button>
-        <button data-panel="shezhi">设置</button>
-      </div>
+      <!-- tiny 档收纳：☰ 走原生弹出菜单（条窗高度装不下 DOM 菜单） -->
     </div>
 
     <!-- 调宽热区：横条用左右，竖条用上下 -->
@@ -64,17 +57,6 @@
 
   <!-- NPC 悬停气泡（全局轻量组件，跟随鼠标） -->
   <div id="tip" class="hidden"></div>
-
-  <!-- 右键菜单：宽度四档 + 重置位置 -->
-  <div id="ctx-menu" class="hidden">
-    <div class="ctx-title">条宽</div>
-    <button class="ctx-item" data-wrp="0.2">1/5 屏</button>
-    <button class="ctx-item" data-wrp="0.3333">1/3 屏</button>
-    <button class="ctx-item" data-wrp="0.5">1/2 屏</button>
-    <button class="ctx-item" data-wrp="1">全宽</button>
-    <div class="ctx-sep"></div>
-    <button class="ctx-item" data-role="reset">重置位置</button>
-  </div>
 
   <div id="toast" class="hidden"></div>
   <!-- 离线简报 / 确认弹窗（点空白不关闭，必须点按钮） -->

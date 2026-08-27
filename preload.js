@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('api', {
   getLayout: () => ipcRenderer.invoke('layout:get'),
   setBarLayout: (patch) => ipcRenderer.invoke('bar:layout', patch || {}),
   resetBarLayout: () => ipcRenderer.invoke('bar:reset'),
+  nativeMenu: (spec) => ipcRenderer.invoke('bar:nativemenu', spec),
   barDrag: (phase) => ipcRenderer.invoke('bar:drag', phase),
   barResize: (phase, edge) => ipcRenderer.invoke('bar:resize', { phase, edge })
 });
